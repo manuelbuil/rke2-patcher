@@ -14,7 +14,7 @@ import (
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/patcher"
 )
 
-const version = "0.2.4"
+const version = "0.2.5"
 
 type imageListOptions struct {
 	WithCVEs bool
@@ -287,9 +287,25 @@ func runImageList(component components.Component, options imageListOptions) erro
 		return nil
 	}
 
-	tags, err := dockerhub.ListTags(component.DockerHubRepository, 20)
+	currentImage := runningImages[0].Image
+	_, currentTag := kube.SplitImage(currentImage)
+	if currentTag == "" {
+		return fmt.Errorf("running image %q does not include a tag", currentImage)
+	}
+
+	tagsForSelection, err := dockerhub.ListTags(component.DockerHubRepository, 200)
 	if err != nil {
 		return err
+	}
+
+	tagsToShow, _ := selectTagsForCVEListing(tagsForSelection, currentTag)
+	if len(tagsToShow) == 0 {
+		return fmt.Errorf("failed to determine tags to show for current tag %q", currentTag)
+	}
+
+	tagInfoByName := make(map[string]dockerhub.Tag, len(tagsForSelection))
+	for _, tag := range tagsForSelection {
+		tagInfoByName[tag.Name] = tag
 	}
 
 	inUseTags := make(map[string]struct{})
@@ -307,9 +323,14 @@ func runImageList(component components.Component, options imageListOptions) erro
 		fmt.Printf("- %s (pods: %d)\n", summary.Image, summary.Count)
 	}
 
-	fmt.Printf("available tags (%d):\n", len(tags))
+	fmt.Printf("available tags (%d):\n", len(tagsToShow))
 
-	for _, tag := range tags {
+	for _, tagName := range tagsToShow {
+		tag, found := tagInfoByName[tagName]
+		if !found {
+			continue
+		}
+
 		suffix := ""
 		if _, found := inUseTags[tag.Name]; found {
 			suffix = " <-- in use"
