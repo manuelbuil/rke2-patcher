@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
@@ -14,7 +15,7 @@ import (
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/patcher"
 )
 
-const version = "0.2.6"
+const version = "0.2.8"
 
 type imageListOptions struct {
 	WithCVEs bool
@@ -27,8 +28,9 @@ type cveListEntry struct {
 }
 
 type imagePatchOptions struct {
-	DryRun bool
-	Revert bool
+	DryRun  bool
+	Revert  bool
+	DataDir string
 }
 
 func main() {
@@ -140,19 +142,42 @@ func parseImagePatchOptions(args []string) (imagePatchOptions, error) {
 		return options, nil
 	}
 
-	for _, raw := range args {
-		arg := strings.TrimSpace(raw)
-		switch arg {
-		case "--dry-run":
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		switch {
+		case arg == "--dry-run":
 			if options.DryRun {
 				return imagePatchOptions{}, fmt.Errorf("duplicate --dry-run option")
 			}
 			options.DryRun = true
-		case "--revert":
+		case arg == "--revert":
 			if options.Revert {
 				return imagePatchOptions{}, fmt.Errorf("duplicate --revert option")
 			}
 			options.Revert = true
+		case strings.HasPrefix(arg, "--data-dir="):
+			if options.DataDir != "" {
+				return imagePatchOptions{}, fmt.Errorf("duplicate --data-dir option")
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(arg, "--data-dir="))
+			if value == "" {
+				return imagePatchOptions{}, fmt.Errorf("--data-dir requires a value")
+			}
+			options.DataDir = value
+		case arg == "--data-dir":
+			if options.DataDir != "" {
+				return imagePatchOptions{}, fmt.Errorf("duplicate --data-dir option")
+			}
+			i++
+			if i >= len(args) {
+				return imagePatchOptions{}, fmt.Errorf("--data-dir requires a value")
+			}
+
+			value := strings.TrimSpace(args[i])
+			if value == "" {
+				return imagePatchOptions{}, fmt.Errorf("--data-dir requires a value")
+			}
+			options.DataDir = value
 		default:
 			return imagePatchOptions{}, fmt.Errorf("unsupported image-patch option(s): %s", strings.Join(args, " "))
 		}
@@ -366,7 +391,7 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return err
 	}
 
-	filePath, generatedContent := patcher.BuildHelmChartConfig(component.Name, component.HelmChartConfigName, currentImageName, targetTagName)
+	filePath, generatedContent := patcher.BuildHelmChartConfigWithDataDir(component.Name, component.HelmChartConfigName, currentImageName, targetTagName, options.DataDir)
 
 	if options.DryRun {
 		fmt.Printf("component: %s\n", component.Name)
@@ -437,6 +462,10 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		}
 	}
 
+	if err := ensureManifestsDirectoryExists(filePath); err != nil {
+		return err
+	}
+
 	err = patcher.WriteHelmChartConfigContent(filePath, contentToWrite)
 	if err != nil {
 		return err
@@ -447,6 +476,28 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 	fmt.Printf("current tag: %s\n", currentImageTag)
 	fmt.Printf("new tag: %s\n", targetTagName)
 	fmt.Printf("wrote HelmChartConfig: %s\n", filePath)
+
+	return nil
+}
+
+func ensureManifestsDirectoryExists(filePath string) error {
+	manifestsDir := strings.TrimSpace(filepath.Dir(filePath))
+	if manifestsDir == "" {
+		return fmt.Errorf("failed to resolve manifests directory from output path %q; use --data-dir <path> (for example /var/lib/rancher/rke2)", filePath)
+	}
+
+	info, err := os.Stat(manifestsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("manifests directory %q does not exist; use --data-dir <path> to point to the RKE2 data directory", manifestsDir)
+		}
+
+		return fmt.Errorf("failed to verify manifests directory %q: %w", manifestsDir, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("manifests path %q is not a directory; use --data-dir <path> to point to the RKE2 data directory", manifestsDir)
+	}
 
 	return nil
 }
@@ -630,7 +681,7 @@ func printUsage() {
 	fmt.Println("  rke2-patcher --version")
 	fmt.Println("  rke2-patcher image-cve <component> [--scanner-mode cluster|local]")
 	fmt.Println("  rke2-patcher image-list <component> [--with-cves] [--verbose]")
-	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--revert]")
+	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--revert] [--data-dir <path>]")
 	fmt.Println()
 	fmt.Printf("Supported components: %s\n", strings.Join(components.Supported(), ", "))
 }

@@ -12,13 +12,14 @@ import (
 
 const (
 	manifestsDirEnv = "RKE2_PATCHER_MANIFESTS_DIR"
+	dataDirEnv      = "RKE2_PATCHER_DATA_DIR"
 
 	helmChartConfigFileEnv = "RKE2_PATCHER_HELMCHARTCONFIG_FILE"
 	helmChartConfigNameEnv = "RKE2_PATCHER_HELMCHARTCONFIG_NAME"
 	helmNamespaceEnv       = "RKE2_PATCHER_HELM_NAMESPACE"
 
-	defaultManifestsDir = "/var/lib/rancher/rke2/server/manifests"
-	defaultNamespace    = "kube-system"
+	defaultDataDir   = "/var/lib/rancher/rke2"
+	defaultNamespace = "kube-system"
 )
 
 func WriteHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, error) {
@@ -40,7 +41,12 @@ func WriteHelmChartConfigContent(filePath string, content string) error {
 }
 
 func BuildHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, string) {
-	manifestsDir := envOrDefault(manifestsDirEnv, defaultManifestsDir)
+	return BuildHelmChartConfigWithDataDir(componentName, defaultChartConfigName, imageName, imageTag, "")
+}
+
+func BuildHelmChartConfigWithDataDir(componentName string, defaultChartConfigName string, imageName string, imageTag string, dataDirOverride string) (string, string) {
+	manifestsDir := resolveManifestsDir(dataDirOverride)
+
 	helmChartConfigFile := envOrDefault(helmChartConfigFileEnv, componentName+"-config-rke2-patcher.yaml")
 	helmChartConfigName := envOrDefault(helmChartConfigNameEnv, defaultChartConfigName)
 	namespace := envOrDefault(helmNamespaceEnv, defaultNamespace)
@@ -49,6 +55,21 @@ func BuildHelmChartConfig(componentName string, defaultChartConfigName string, i
 	content := renderHelmChartConfig(componentName, helmChartConfigName, namespace, imageName, imageTag)
 
 	return filePath, content
+}
+
+func resolveManifestsDir(dataDirOverride string) string {
+	trimmedDataDirOverride := strings.TrimSpace(dataDirOverride)
+	if trimmedDataDirOverride != "" {
+		return filepath.Join(trimmedDataDirOverride, "server", "manifests")
+	}
+
+	trimmedManifestsDir := strings.TrimSpace(os.Getenv(manifestsDirEnv))
+	if trimmedManifestsDir != "" {
+		return trimmedManifestsDir
+	}
+
+	dataDir := envOrDefault(dataDirEnv, defaultDataDir)
+	return filepath.Join(dataDir, "server", "manifests")
 }
 
 func MergeHelmChartConfigWithContents(generatedContent string, existingContents []string) (string, error) {

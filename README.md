@@ -21,7 +21,7 @@ rke2-patcher --version
 rke2-patcher image-cve <component>
 rke2-patcher image-cve <component> --scanner-mode <cluster|local>
 rke2-patcher image-list <component> [--with-cves] [--verbose]
-rke2-patcher image-patch <component> [--dry-run] [--revert]
+rke2-patcher image-patch <component> [--dry-run] [--revert] [--data-dir <path>]
 ```
 
 - `--version` always prints the CLI version and also tries to print the connected cluster version (`gitVersion`) from Kubernetes API `/version`.
@@ -90,13 +90,19 @@ rke2-patcher image-patch traefik --dry-run
 rke2-patcher image-patch traefik --revert
 ```
 
+```bash
+rke2-patcher image-patch traefik --data-dir /custom/rke2
+```
+
 - Detects the current running image repository in-cluster.
 - Verifies the component workload exists in `kube-system` (DaemonSet/Deployment mapping).
 - Picks the next newer tag from Docker Hub and writes a `HelmChartConfig` manifest with that tag.
 - With `--dry-run`, prints the exact `HelmChartConfig` that would be written and does not write any file.
 - With `--revert`, moves one image back (to the previous/older tag).
+- With `--data-dir`, writes the `HelmChartConfig` under `<data-dir>/server/manifests` for that command run.
 - Refuses to patch when current tag is already the newest available tag.
 - Refuses to revert when current tag is already the oldest available tag in the observed list.
+- Refuses to write if the target manifests directory does not exist and suggests using `--data-dir <path>`.
 - If one or more `HelmChartConfig` objects already exist in the cluster for the same chart name and namespace, asks for confirmation before attempting a merge.
 - If merge is approved, prints the merged output in dry-run format and asks for a second confirmation before writing.
 - For `canal-calico`, it updates the chart values under `calico.cniImage`, `calico.nodeImage`, `calico.flexvolImage`, and `calico.kubeControllerImage`.
@@ -146,9 +152,14 @@ The `image-patch` command supports these overrides:
   - Optional kubeconfig path used when service account auth is not available.
   - Useful when running as a host binary on control-plane nodes.
 
+- `RKE2_PATCHER_DATA_DIR`
+  - RKE2 data directory used to derive the manifest output path.
+  - Default: `/var/lib/rancher/rke2`
+  - Effective manifests path: `<data-dir>/server/manifests`
+  - For `image-patch`, `--data-dir` takes precedence when provided.
 - `RKE2_PATCHER_MANIFESTS_DIR`
-  - Directory where the manifest file is written.
-  - Default: `/var/lib/rancher/rke2/server/manifests`
+  - Optional direct override for the full manifests directory path.
+  - Backward-compatible with previous behavior.
 - `RKE2_PATCHER_HELMCHARTCONFIG_FILE`
   - Output filename for the generated manifest.
   - Default: `<component>-config-rke2-patcher.yaml`
@@ -184,9 +195,9 @@ The `image-cve` command supports these overrides:
 Example:
 
 ```bash
-RKE2_PATCHER_MANIFESTS_DIR=/tmp \
+RKE2_PATCHER_DATA_DIR=/var/lib/rancher/rke2 \
 RKE2_PATCHER_HELMCHARTCONFIG_FILE=traefik-config-rke2-patcher.yaml \
 RKE2_PATCHER_HELMCHARTCONFIG_NAME=rke2-traefik \
 RKE2_PATCHER_HELM_NAMESPACE=kube-system \
-./rke2-patcher image-patch traefik
+./rke2-patcher image-patch traefik --data-dir /var/lib/rancher/rke2
 ```
