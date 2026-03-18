@@ -19,9 +19,8 @@ make build
 ```bash
 rke2-patcher --version
 rke2-patcher image-cve <component>
-rke2-patcher image-cve <component> --scanner-mode <cluster|local>
 rke2-patcher image-list <component> [--with-cves] [--verbose]
-rke2-patcher image-patch <component> [--dry-run] [--revert] [--data-dir <path>]
+rke2-patcher image-patch <component> [--dry-run] [--revert]
 ```
 
 - `--version` always prints the CLI version and also tries to print the connected cluster version (`gitVersion`) from Kubernetes API `/version`.
@@ -42,15 +41,10 @@ make image-patch COMPONENT=traefik
 rke2-patcher image-cve traefik
 ```
 
-```bash
-rke2-patcher image-cve traefik --scanner-mode cluster
-```
-
 - Looks up the current running image in the cluster for the selected component.
 - Verifies the component workload exists in `kube-system` (DaemonSet/Deployment mapping).
 - Scans it for CVEs using an in-cluster Kubernetes `Job` that runs `trivy`.
 - Uses cluster mode by default (`RKE2_PATCHER_CVE_MODE=cluster`).
-- `--scanner-mode` overrides `RKE2_PATCHER_CVE_MODE` for that command run.
 - In cluster mode, if the target scan namespace does not exist, the tool asks whether it should create it and creates it on confirmation.
 
 ### 2) List available images (tags)
@@ -67,7 +61,8 @@ rke2-patcher image-list traefik --with-cves
 rke2-patcher image-list traefik --with-cves --verbose
 ```
 
-- Lists recent tags from Docker Hub for the selected component repository.
+- Lists release tags from the configured registry for the selected component repository, ordered newest-first (higher build date first), with current and previous tags included.
+- Filters out non-release signature/attestation tags (for example `sha256-...*.sig` and `sha256-...*.att`) from `image-list` output.
 - Highlights tags currently in use by running pods as `"<-- in use"` when cluster access is available.
 - With `--with-cves`, prints a compact table with columns: `TAG`, `STATUS`, `UPDATED`, `CVE COUNT`, and `VULNERABILITIES`.
 - CVEs are collected for: the current image tag, the previous image tag, and all newer available tags.
@@ -90,19 +85,14 @@ rke2-patcher image-patch traefik --dry-run
 rke2-patcher image-patch traefik --revert
 ```
 
-```bash
-rke2-patcher image-patch traefik --data-dir /custom/rke2
-```
-
 - Detects the current running image repository in-cluster.
 - Verifies the component workload exists in `kube-system` (DaemonSet/Deployment mapping).
-- Picks the next newer tag from Docker Hub and writes a `HelmChartConfig` manifest with that tag.
+- Picks the next newer tag from `registry.rancher.com` and writes a `HelmChartConfig` manifest with that tag.
 - With `--dry-run`, prints the exact `HelmChartConfig` that would be written and does not write any file.
 - With `--revert`, moves one image back (to the previous/older tag).
-- With `--data-dir`, writes the `HelmChartConfig` under `<data-dir>/server/manifests` for that command run.
 - Refuses to patch when current tag is already the newest available tag.
 - Refuses to revert when current tag is already the oldest available tag in the observed list.
-- Refuses to write if the target manifests directory does not exist and suggests using `--data-dir <path>`.
+- Refuses to write if the target manifests directory does not exist and suggests setting `RKE2_PATCHER_DATA_DIR`.
 - If one or more `HelmChartConfig` objects already exist in the cluster for the same chart name and namespace, asks for confirmation before attempting a merge.
 - If merge is approved, prints the merged output in dry-run format and asks for a second confirmation before writing.
 - For `canal-calico`, it updates the chart values under `calico.cniImage`, `calico.nodeImage`, `calico.flexvolImage`, and `calico.kubeControllerImage`.
@@ -134,11 +124,10 @@ rke2-patcher image-patch traefik --data-dir /custom/rke2
     - `/var/run/secrets/kubernetes.io/serviceaccount/token`
     - `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`
   - Kubeconfig (host binary mode on control-plane):
-    - `RKE2_PATCHER_KUBECONFIG`, or
     - `KUBECONFIG` (first file in list), or
     - `/etc/rancher/rke2/rke2.yaml`, or
     - `~/.kube/config`
-- Network access to Docker Hub.
+- Network access to the configured image registry endpoint (`RKE2_PATCHER_REGISTRY`, default `registry.rancher.com`).
 - For `image-cve` default mode (`RKE2_PATCHER_CVE_MODE=cluster`), Kubernetes access that allows creating and reading Jobs/Pods in the scan namespace.
 - Local scanner installation is optional and only needed when using local mode (`RKE2_PATCHER_CVE_MODE=local`):
   - `trivy`, or
@@ -146,27 +135,26 @@ rke2-patcher image-patch traefik --data-dir /custom/rke2
 
 ## Environment variables
 
+General tag-registry override:
+
+- `RKE2_PATCHER_REGISTRY`
+  - Registry endpoint used to list available tags for `image-list` and `image-patch`.
+  - Default: `registry.rancher.com`
+  - Accepted forms: `registry.example.local`, `registry.example.local:5000`, `https://registry.example.local`, `http://registry.example.local:5000`
+  - Behavior: tag listing starts unauthenticated, then follows Bearer challenge flow only if the registry returns `401` with `WWW-Authenticate: Bearer ...`.
+  - To use Docker Hub instead: `RKE2_PATCHER_REGISTRY=registry-1.docker.io` (all Rancher component images are mirrored there publicly).
+
 The `image-patch` command supports these overrides:
 
-- `RKE2_PATCHER_KUBECONFIG`
+- `KUBECONFIG`
   - Optional kubeconfig path used when service account auth is not available.
+  - If multiple files are provided, the first entry is used.
   - Useful when running as a host binary on control-plane nodes.
 
 - `RKE2_PATCHER_DATA_DIR`
   - RKE2 data directory used to derive the manifest output path.
   - Default: `/var/lib/rancher/rke2`
   - Effective manifests path: `<data-dir>/server/manifests`
-  - For `image-patch`, `--data-dir` takes precedence when provided.
-- `RKE2_PATCHER_MANIFESTS_DIR`
-  - Optional direct override for the full manifests directory path.
-  - Backward-compatible with previous behavior.
-- `RKE2_PATCHER_HELMCHARTCONFIG_FILE`
-  - Output filename for the generated manifest.
-  - Default: `<component>-config-rke2-patcher.yaml`
-  - If the file already exists, `image-patch` overwrites it.
-- `RKE2_PATCHER_HELMCHARTCONFIG_NAME`
-  - `.metadata.name` for the generated `HelmChartConfig`.
-  - Default: component-specific chart config name (for example `rke2-traefik`).
 - `RKE2_PATCHER_HELM_NAMESPACE`
   - `.metadata.namespace` for the generated `HelmChartConfig`.
   - Default: `kube-system`
@@ -196,8 +184,6 @@ Example:
 
 ```bash
 RKE2_PATCHER_DATA_DIR=/var/lib/rancher/rke2 \
-RKE2_PATCHER_HELMCHARTCONFIG_FILE=traefik-config-rke2-patcher.yaml \
-RKE2_PATCHER_HELMCHARTCONFIG_NAME=rke2-traefik \
 RKE2_PATCHER_HELM_NAMESPACE=kube-system \
-./rke2-patcher image-patch traefik --data-dir /var/lib/rancher/rke2
+./rke2-patcher image-patch traefik
 ```

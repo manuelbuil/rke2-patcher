@@ -6,7 +6,6 @@ import (
 )
 
 func TestBuildHelmChartConfigWithDataDir_OverrideTakesPrecedence(t *testing.T) {
-	t.Setenv("RKE2_PATCHER_MANIFESTS_DIR", "/tmp/from-env")
 	t.Setenv("RKE2_PATCHER_DATA_DIR", "/tmp/from-data-env")
 
 	filePath, _ := BuildHelmChartConfigWithDataDir("traefik", "rke2-traefik", "rancher/hardened-traefik", "v3.4.0", "/tmp/from-flag")
@@ -19,7 +18,6 @@ func TestBuildHelmChartConfigWithDataDir_OverrideTakesPrecedence(t *testing.T) {
 
 func TestBuildHelmChartConfigWithDataDir_UsesDataDirEnvByDefault(t *testing.T) {
 	t.Setenv("RKE2_PATCHER_DATA_DIR", "/tmp/from-data-env")
-	t.Setenv("RKE2_PATCHER_MANIFESTS_DIR", "")
 
 	filePath, _ := BuildHelmChartConfigWithDataDir("traefik", "rke2-traefik", "rancher/hardened-traefik", "v3.4.0", "")
 

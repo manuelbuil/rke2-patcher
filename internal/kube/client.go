@@ -17,8 +17,6 @@ const (
 	kubeAPIURL              = "https://kubernetes.default.svc"
 	serviceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	serviceAccountCAPath    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-
-	kubeconfigPathEnv = "RKE2_PATCHER_KUBECONFIG"
 )
 
 type kubeAPI struct {
@@ -234,14 +232,11 @@ func (k kubeconfig) findUser(name string) (kubeconfigUser, error) {
 }
 
 // discoverKubeconfigPath tries to find the Kubeconfig file first by checking:
-// 1 - KUBECONFIG or RKE2_PATCHER_KUBECONFIG envvars
+// 1 - KUBECONFIG envvar
 // 2 - /etc/rancher/rke2/rke2.yaml (default location for RKE2)
 // 3 - ~/.kube/config
 func discoverKubeconfigPath() (string, error) {
-	candidates := make([]string, 0, 4)
-	if configured := strings.TrimSpace(os.Getenv(kubeconfigPathEnv)); configured != "" {
-		candidates = append(candidates, configured)
-	}
+	candidates := make([]string, 0, 3)
 
 	if configured := strings.TrimSpace(os.Getenv("KUBECONFIG")); configured != "" {
 		parts := strings.Split(configured, ":")

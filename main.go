@@ -6,16 +6,18 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/cve"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/dockerhub"
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/patcher"
+	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/registry"
 )
 
-const version = "0.2.8"
+const version = "0.4.2"
 
 type imageListOptions struct {
 	WithCVEs bool
@@ -28,9 +30,8 @@ type cveListEntry struct {
 }
 
 type imagePatchOptions struct {
-	DryRun  bool
-	Revert  bool
-	DataDir string
+	DryRun bool
+	Revert bool
 }
 
 func main() {
@@ -59,13 +60,12 @@ func main() {
 
 	switch command {
 	case "image-cve":
-		scannerMode, parseErr := parseImageCVEOptions(extraArgs)
-		if parseErr != nil {
-			log.Printf("%v", parseErr)
+		if len(extraArgs) > 0 {
+			log.Printf("unsupported image-cve option(s): %s", strings.Join(extraArgs, " "))
 			printUsage()
 			os.Exit(2)
 		}
-		if err := runCVE(component, scannerMode); err != nil {
+		if err := runCVE(component); err != nil {
 			log.Fatal(err)
 		}
 	case "image-list":
@@ -96,45 +96,6 @@ func main() {
 	}
 }
 
-// parseImageCVEOptions parses and validates the scanner mode option
-func parseImageCVEOptions(args []string) (string, error) {
-	if len(args) == 0 {
-		return "", nil
-	}
-
-	scannerMode := ""
-
-	for i := 0; i < len(args); i++ {
-		arg := strings.TrimSpace(args[i])
-		switch {
-		case strings.HasPrefix(arg, "--scanner-mode="):
-			if scannerMode != "" {
-				return "", fmt.Errorf("duplicate --scanner-mode option")
-			}
-			scannerMode = strings.TrimSpace(strings.TrimPrefix(arg, "--scanner-mode="))
-			if scannerMode == "" {
-				return "", fmt.Errorf("--scanner-mode requires a value: cluster or local")
-			}
-		case arg == "--scanner-mode":
-			if scannerMode != "" {
-				return "", fmt.Errorf("duplicate --scanner-mode option")
-			}
-			i++
-			if i >= len(args) {
-				return "", fmt.Errorf("--scanner-mode requires a value: cluster or local")
-			}
-			scannerMode = strings.TrimSpace(args[i])
-			if scannerMode == "" {
-				return "", fmt.Errorf("--scanner-mode requires a value: cluster or local")
-			}
-		default:
-			return "", fmt.Errorf("unsupported image-cve option(s): %s", strings.Join(args, " "))
-		}
-	}
-
-	return scannerMode, nil
-}
-
 func parseImagePatchOptions(args []string) (imagePatchOptions, error) {
 	options := imagePatchOptions{}
 
@@ -155,29 +116,6 @@ func parseImagePatchOptions(args []string) (imagePatchOptions, error) {
 				return imagePatchOptions{}, fmt.Errorf("duplicate --revert option")
 			}
 			options.Revert = true
-		case strings.HasPrefix(arg, "--data-dir="):
-			if options.DataDir != "" {
-				return imagePatchOptions{}, fmt.Errorf("duplicate --data-dir option")
-			}
-			value := strings.TrimSpace(strings.TrimPrefix(arg, "--data-dir="))
-			if value == "" {
-				return imagePatchOptions{}, fmt.Errorf("--data-dir requires a value")
-			}
-			options.DataDir = value
-		case arg == "--data-dir":
-			if options.DataDir != "" {
-				return imagePatchOptions{}, fmt.Errorf("duplicate --data-dir option")
-			}
-			i++
-			if i >= len(args) {
-				return imagePatchOptions{}, fmt.Errorf("--data-dir requires a value")
-			}
-
-			value := strings.TrimSpace(args[i])
-			if value == "" {
-				return imagePatchOptions{}, fmt.Errorf("--data-dir requires a value")
-			}
-			options.DataDir = value
 		default:
 			return imagePatchOptions{}, fmt.Errorf("unsupported image-patch option(s): %s", strings.Join(args, " "))
 		}
@@ -218,7 +156,8 @@ func parseImageListOptions(args []string) (imageListOptions, error) {
 	return options, nil
 }
 
-func runCVE(component components.Component, scannerMode string) error {
+func runCVE(component components.Component) error {
+	scannerMode := ""
 	if err := kube.EnsureAnyWorkloadExists(component.Workloads); err != nil {
 		return err
 	}
@@ -271,7 +210,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 			return fmt.Errorf("running image %q does not include a tag", currentImage)
 		}
 
-		tagsForSelection, err := dockerhub.ListTags(component.DockerHubRepository, 200)
+		tagsForSelection, err := registry.ListTags(component.Repository, 200)
 		if err != nil {
 			return fmt.Errorf("failed to list tags for CVE selection: %w", err)
 		}
@@ -319,7 +258,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 		return fmt.Errorf("running image %q does not include a tag", currentImage)
 	}
 
-	tagsForSelection, err := dockerhub.ListTags(component.DockerHubRepository, 200)
+	tagsForSelection, err := registry.ListTags(component.Repository, 200)
 	if err != nil {
 		return err
 	}
@@ -329,7 +268,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 		return fmt.Errorf("failed to determine tags to show for current tag %q", currentTag)
 	}
 
-	tagInfoByName := make(map[string]dockerhub.Tag, len(tagsForSelection))
+	tagInfoByName := make(map[string]registry.Tag, len(tagsForSelection))
 	for _, tag := range tagsForSelection {
 		tagInfoByName[tag.Name] = tag
 	}
@@ -343,7 +282,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 	}
 
 	fmt.Printf("component: %s\n", component.Name)
-	fmt.Printf("repository: %s\n", component.DockerHubRepository)
+	fmt.Printf("repository: %s\n", component.Repository)
 	fmt.Printf("running image(s):\n")
 	for _, summary := range runningImages {
 		fmt.Printf("- %s (pods: %d)\n", summary.Image, summary.Count)
@@ -386,12 +325,12 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 	runningImage := runningImages[0].Image
 	currentImageName, currentImageTag := kube.SplitImage(runningImage)
 
-	targetTagName, err := resolvePatchTargetTag(component.DockerHubRepository, currentImageTag, options.Revert)
+	targetTagName, err := resolvePatchTargetTag(component.Repository, currentImageTag, options.Revert)
 	if err != nil {
 		return err
 	}
 
-	filePath, generatedContent := patcher.BuildHelmChartConfigWithDataDir(component.Name, component.HelmChartConfigName, currentImageName, targetTagName, options.DataDir)
+	filePath, generatedContent := patcher.BuildHelmChartConfigWithDataDir(component.Name, component.HelmChartConfigName, currentImageName, targetTagName, "")
 
 	if options.DryRun {
 		fmt.Printf("component: %s\n", component.Name)
@@ -483,20 +422,20 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 func ensureManifestsDirectoryExists(filePath string) error {
 	manifestsDir := strings.TrimSpace(filepath.Dir(filePath))
 	if manifestsDir == "" {
-		return fmt.Errorf("failed to resolve manifests directory from output path %q; use --data-dir <path> (for example /var/lib/rancher/rke2)", filePath)
+		return fmt.Errorf("failed to resolve manifests directory from output path %q; set RKE2_PATCHER_DATA_DIR (for example /var/lib/rancher/rke2)", filePath)
 	}
 
 	info, err := os.Stat(manifestsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("manifests directory %q does not exist; use --data-dir <path> to point to the RKE2 data directory", manifestsDir)
+			return fmt.Errorf("manifests directory %q does not exist; set RKE2_PATCHER_DATA_DIR to point to the RKE2 data directory", manifestsDir)
 		}
 
 		return fmt.Errorf("failed to verify manifests directory %q: %w", manifestsDir, err)
 	}
 
 	if !info.IsDir() {
-		return fmt.Errorf("manifests path %q is not a directory; use --data-dir <path> to point to the RKE2 data directory", manifestsDir)
+		return fmt.Errorf("manifests path %q is not a directory; set RKE2_PATCHER_DATA_DIR to point to the RKE2 data directory", manifestsDir)
 	}
 
 	return nil
@@ -524,14 +463,18 @@ func promptYesNo(prompt string) (bool, error) {
 }
 
 func resolvePatchTargetTag(repository string, currentTag string, revert bool) (string, error) {
-	tags, err := dockerhub.ListTags(repository, 200)
+	tags, err := registry.ListTags(repository, 200)
 	if err != nil {
 		return "", fmt.Errorf("failed to list tags: %w", err)
 	}
+	orderedTags := orderedComparableTags(tags)
+	if len(orderedTags) == 0 {
+		return "", fmt.Errorf("failed to determine ordered patchable tags")
+	}
 
 	currentIndex := -1
-	for index, tag := range tags {
-		if tag.Name == currentTag && currentIndex == -1 {
+	for index, tagName := range orderedTags {
+		if tagName == currentTag && currentIndex == -1 {
 			currentIndex = index
 		}
 	}
@@ -542,10 +485,10 @@ func resolvePatchTargetTag(repository string, currentTag string, revert bool) (s
 
 	if revert {
 		targetIndex := currentIndex + 1
-		if targetIndex >= len(tags) {
+		if targetIndex >= len(orderedTags) {
 			return "", fmt.Errorf("refusing to revert: current tag %q is already the oldest available in the observed tag list", currentTag)
 		}
-		return tags[targetIndex].Name, nil
+		return orderedTags[targetIndex], nil
 	}
 
 	targetIndex := currentIndex - 1
@@ -553,25 +496,26 @@ func resolvePatchTargetTag(repository string, currentTag string, revert bool) (s
 		return "", fmt.Errorf("refusing to patch: current tag %q is already the latest", currentTag)
 	}
 
-	return tags[targetIndex].Name, nil
+	return orderedTags[targetIndex], nil
 }
 
 func listRunningImagesForComponent(component components.Component) ([]kube.PodImageSummary, error) {
 	if len(component.Workloads) == 0 {
-		return kube.ListRunningImagesByRepository(component.DockerHubRepository)
+		return kube.ListRunningImagesByRepository(component.Repository)
 	}
 
-	return kube.ListRunningImagesForWorkloadsByRepository(component.Workloads, component.DockerHubRepository)
+	return kube.ListRunningImagesForWorkloadsByRepository(component.Workloads, component.Repository)
 }
 
-func selectTagsForCVEListing(tags []dockerhub.Tag, currentTag string) ([]string, string) {
-	if len(tags) == 0 {
+func selectTagsForCVEListing(tags []registry.Tag, currentTag string) ([]string, string) {
+	orderedTags := orderedComparableTags(tags)
+	if len(orderedTags) == 0 {
 		return nil, ""
 	}
 
 	currentIndex := -1
-	for index, tag := range tags {
-		if tag.Name == currentTag {
+	for index, tagName := range orderedTags {
+		if tagName == currentTag {
 			currentIndex = index
 			break
 		}
@@ -581,38 +525,167 @@ func selectTagsForCVEListing(tags []dockerhub.Tag, currentTag string) ([]string,
 		return nil, ""
 	}
 
-	selected := make(map[string]struct{})
-	selected[currentTag] = struct{}{}
 	previousTag := ""
 
 	previousIndex := currentIndex + 1
-	if previousIndex < len(tags) {
-		previousTag = tags[previousIndex].Name
-		selected[previousTag] = struct{}{}
+	if previousIndex < len(orderedTags) {
+		previousTag = orderedTags[previousIndex]
 	}
 
+	ordered := make([]string, 0, currentIndex+2)
+
+	// newer tags first (already sorted newest-first by orderedComparableTags)
 	for index := 0; index < currentIndex; index++ {
-		selected[tags[index].Name] = struct{}{}
+		ordered = append(ordered, orderedTags[index])
 	}
 
-	ordered := make([]string, 0, len(selected))
-	for _, tag := range tags {
-		if _, found := selected[tag.Name]; found {
-			ordered = append(ordered, tag.Name)
-		}
+	ordered = append(ordered, currentTag)
+
+	if previousTag != "" {
+		ordered = append(ordered, previousTag)
 	}
 
 	return ordered, previousTag
 }
 
-func printImageListWithCVEs(component components.Component, tags []dockerhub.Tag, tagsToScan []string, currentTag string, previousTag string, cveByTag map[string]cveListEntry, verbose bool) {
-	tagInfoByName := make(map[string]dockerhub.Tag, len(tags))
+type comparableTag struct {
+	Name   string
+	Major  int
+	Minor  int
+	Patch  int
+	Build  int
+	Flavor string
+}
+
+func orderedComparableTags(tags []registry.Tag) []string {
+	parsed := make([]comparableTag, 0, len(tags))
+	for _, tag := range tags {
+		if item, ok := parseComparableTag(tag.Name); ok {
+			parsed = append(parsed, item)
+		}
+	}
+
+	if len(parsed) == 0 {
+		return nil
+	}
+
+	sort.Slice(parsed, func(i, j int) bool {
+		left := parsed[i]
+		right := parsed[j]
+
+		if left.Build != right.Build {
+			return left.Build > right.Build
+		}
+
+		if left.Major != right.Major {
+			return left.Major > right.Major
+		}
+
+		if left.Minor != right.Minor {
+			return left.Minor > right.Minor
+		}
+
+		if left.Patch != right.Patch {
+			return left.Patch > right.Patch
+		}
+
+		if left.Flavor != right.Flavor {
+			return left.Flavor > right.Flavor
+		}
+
+		return left.Name > right.Name
+	})
+
+	seen := make(map[string]struct{}, len(parsed))
+	ordered := make([]string, 0, len(parsed))
+	for _, tag := range parsed {
+		if _, found := seen[tag.Name]; found {
+			continue
+		}
+		seen[tag.Name] = struct{}{}
+		ordered = append(ordered, tag.Name)
+	}
+
+	return ordered
+}
+
+func parseComparableTag(tagName string) (comparableTag, bool) {
+	name := strings.TrimSpace(tagName)
+	if name == "" {
+		return comparableTag{}, false
+	}
+
+	lowerName := strings.ToLower(name)
+	if strings.HasPrefix(lowerName, "sha256-") {
+		return comparableTag{}, false
+	}
+
+	if strings.HasSuffix(lowerName, ".sig") || strings.HasSuffix(lowerName, ".att") {
+		return comparableTag{}, false
+	}
+
+	if !strings.HasPrefix(name, "v") {
+		return comparableTag{}, false
+	}
+
+	buildMarker := "-build"
+	buildIndex := strings.LastIndex(name, buildMarker)
+	if buildIndex <= 1 || buildIndex+len(buildMarker) >= len(name) {
+		return comparableTag{}, false
+	}
+
+	buildValue := name[buildIndex+len(buildMarker):]
+	build, err := strconv.Atoi(buildValue)
+	if err != nil {
+		return comparableTag{}, false
+	}
+
+	versionAndFlavor := name[1:buildIndex]
+	versionCore := versionAndFlavor
+	flavor := ""
+	if dashIndex := strings.Index(versionAndFlavor, "-"); dashIndex >= 0 {
+		versionCore = versionAndFlavor[:dashIndex]
+		flavor = versionAndFlavor[dashIndex+1:]
+	}
+
+	versionParts := strings.Split(versionCore, ".")
+	if len(versionParts) != 3 {
+		return comparableTag{}, false
+	}
+
+	major, err := strconv.Atoi(versionParts[0])
+	if err != nil {
+		return comparableTag{}, false
+	}
+
+	minor, err := strconv.Atoi(versionParts[1])
+	if err != nil {
+		return comparableTag{}, false
+	}
+
+	patch, err := strconv.Atoi(versionParts[2])
+	if err != nil {
+		return comparableTag{}, false
+	}
+
+	return comparableTag{
+		Name:   name,
+		Major:  major,
+		Minor:  minor,
+		Patch:  patch,
+		Build:  build,
+		Flavor: flavor,
+	}, true
+}
+
+func printImageListWithCVEs(component components.Component, tags []registry.Tag, tagsToScan []string, currentTag string, previousTag string, cveByTag map[string]cveListEntry, verbose bool) {
+	tagInfoByName := make(map[string]registry.Tag, len(tags))
 	for _, tag := range tags {
 		tagInfoByName[tag.Name] = tag
 	}
 
 	fmt.Printf("COMPONENT:  %s\n", component.Name)
-	fmt.Printf("REPOSITORY: %s\n\n", component.DockerHubRepository)
+	fmt.Printf("REPOSITORY: %s\n\n", component.Repository)
 	fmt.Printf("%-24s %-10s %-12s %-10s %s\n", "TAG", "STATUS", "UPDATED", "CVE COUNT", "VULNERABILITIES")
 
 	for _, tagName := range tagsToScan {
@@ -679,11 +752,21 @@ func truncateText(value string, maxLength int) string {
 func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  rke2-patcher --version")
-	fmt.Println("  rke2-patcher image-cve <component> [--scanner-mode cluster|local]")
+	fmt.Println("  rke2-patcher image-cve <component>")
 	fmt.Println("  rke2-patcher image-list <component> [--with-cves] [--verbose]")
-	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--revert] [--data-dir <path>]")
+	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--revert]")
 	fmt.Println()
 	fmt.Printf("Supported components: %s\n", strings.Join(components.Supported(), ", "))
+	fmt.Println()
+	fmt.Println("Environment variables:")
+	fmt.Println("  KUBECONFIG                         kubeconfig path (first file in list is used)")
+	fmt.Println("  RKE2_PATCHER_REGISTRY              registry base URL (default: registry.rancher.com)")
+	fmt.Println("  RKE2_PATCHER_DATA_DIR              path to RKE2 data directory")
+	fmt.Println("  RKE2_PATCHER_HELM_NAMESPACE        Helm namespace override")
+	fmt.Println("  RKE2_PATCHER_CVE_MODE              CVE scanner mode (cluster|local)")
+	fmt.Println("  RKE2_PATCHER_CVE_NAMESPACE         namespace for the CVE scanner job")
+	fmt.Println("  RKE2_PATCHER_CVE_SCANNER_IMAGE     Trivy scanner image to use")
+	fmt.Println("  RKE2_PATCHER_CVE_JOB_TIMEOUT       timeout for the CVE scanner job (e.g. 5m)")
 }
 
 // printVersion prints the version of the tool and the version of the RKE2 cluster

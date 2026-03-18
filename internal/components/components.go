@@ -8,7 +8,7 @@ import (
 
 type Component struct {
 	Name                string
-	DockerHubRepository string
+	Repository          string
 	HelmChartConfigName string
 	Workloads           []WorkloadRef
 }
@@ -22,7 +22,7 @@ type WorkloadRef struct {
 var registry = map[string]Component{
 	"traefik": {
 		Name:                "rke2-traefik",
-		DockerHubRepository: "rancher/hardened-traefik",
+		Repository:          "rancher/hardened-traefik",
 		HelmChartConfigName: "rke2-traefik",
 		Workloads: []WorkloadRef{{
 			Kind:      "daemonset",
@@ -32,7 +32,7 @@ var registry = map[string]Component{
 	},
 	"ingress-nginx": {
 		Name:                "rke2-ingress-nginx-controller",
-		DockerHubRepository: "rancher/nginx-ingress-controller",
+		Repository:          "rancher/nginx-ingress-controller",
 		HelmChartConfigName: "rke2-ingress-nginx",
 		Workloads: []WorkloadRef{{
 			Kind:      "daemonset",
@@ -42,7 +42,7 @@ var registry = map[string]Component{
 	},
 	"coredns": {
 		Name:                "coredns",
-		DockerHubRepository: "rancher/hardened-coredns",
+		Repository:          "rancher/hardened-coredns",
 		HelmChartConfigName: "rke2-coredns",
 		Workloads: []WorkloadRef{
 			{
@@ -59,12 +59,12 @@ var registry = map[string]Component{
 	},
 	"dns-node-cache": {
 		Name:                "dns-node-cache",
-		DockerHubRepository: "rancher/hardened-dns-node-cache",
+		Repository:          "rancher/hardened-dns-node-cache",
 		HelmChartConfigName: "rke2-coredns",
 	},
 	"calico-operator": {
 		Name:                "calico-operator",
-		DockerHubRepository: "rancher/mirrored-calico-operator",
+		Repository:          "rancher/mirrored-calico-operator",
 		HelmChartConfigName: "rke2-calico",
 		Workloads: []WorkloadRef{{
 			Kind:      "deployment",
@@ -74,7 +74,7 @@ var registry = map[string]Component{
 	},
 	"cilium-operator": {
 		Name:                "cilium-operator",
-		DockerHubRepository: "rancher/mirrored-cilium-operator-generic",
+		Repository:          "rancher/mirrored-cilium-operator-generic",
 		HelmChartConfigName: "rke2-cilium",
 		Workloads: []WorkloadRef{{
 			Kind:      "deployment",
@@ -84,7 +84,7 @@ var registry = map[string]Component{
 	},
 	"metrics-server": {
 		Name:                "metrics-server",
-		DockerHubRepository: "rancher/hardened-k8s-metrics-server",
+		Repository:          "rancher/hardened-k8s-metrics-server",
 		HelmChartConfigName: "rke2-metrics-server",
 		Workloads: []WorkloadRef{{
 			Kind:      "deployment",
@@ -94,7 +94,7 @@ var registry = map[string]Component{
 	},
 	"flannel": {
 		Name:                "flannel",
-		DockerHubRepository: "rancher/hardened-flannel",
+		Repository:          "rancher/hardened-flannel",
 		HelmChartConfigName: "rke2-flannel",
 		Workloads: []WorkloadRef{{
 			Kind:      "daemonset",
@@ -104,7 +104,7 @@ var registry = map[string]Component{
 	},
 	"canal-calico": {
 		Name:                "canal-calico",
-		DockerHubRepository: "rancher/hardened-calico",
+		Repository:          "rancher/hardened-calico",
 		HelmChartConfigName: "rke2-canal",
 		Workloads: []WorkloadRef{{
 			Kind:      "daemonset",
@@ -114,7 +114,7 @@ var registry = map[string]Component{
 	},
 	"canal-flannel": {
 		Name:                "canal-flannel",
-		DockerHubRepository: "rancher/hardened-flannel",
+		Repository:          "rancher/hardened-flannel",
 		HelmChartConfigName: "rke2-canal",
 		Workloads: []WorkloadRef{{
 			Kind:      "daemonset",
@@ -124,17 +124,17 @@ var registry = map[string]Component{
 	},
 	"csi-snapshotter": {
 		Name:                "csi-snapshotter",
-		DockerHubRepository: "rancher/hardened-csi-snapshotter",
+		Repository:          "rancher/hardened-csi-snapshotter",
 		HelmChartConfigName: "rke2-snapshot-controller",
 	},
 	"coredns-cluster-autoscaler": {
 		Name:                "coredns-cluster-autoscaler",
-		DockerHubRepository: "rancher/hardened-cluster-autoscaler",
+		Repository:          "rancher/hardened-cluster-autoscaler",
 		HelmChartConfigName: "rke2-cluster-autoscaler",
 	},
 	"snapshot-controller": {
 		Name:                "snapshot-controller",
-		DockerHubRepository: "rancher/hardened-snapshot-controller",
+		Repository:          "rancher/hardened-snapshot-controller",
 		HelmChartConfigName: "rke2-snapshot-controller",
 		Workloads: []WorkloadRef{{
 			Kind:      "deployment",

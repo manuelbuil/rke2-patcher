@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/registry"
 )
 
 func TestParseImagePatchOptions(t *testing.T) {
@@ -28,35 +30,6 @@ func TestParseImagePatchOptions(t *testing.T) {
 				DryRun: true,
 				Revert: true,
 			},
-		},
-		{
-			name: "data dir separate value",
-			args: []string{"--data-dir", "/var/lib/rancher/rke2-custom"},
-			expected: imagePatchOptions{
-				DataDir: "/var/lib/rancher/rke2-custom",
-			},
-		},
-		{
-			name: "data dir equals value",
-			args: []string{"--data-dir=/var/lib/rancher/rke2-custom"},
-			expected: imagePatchOptions{
-				DataDir: "/var/lib/rancher/rke2-custom",
-			},
-		},
-		{
-			name:        "duplicate data dir",
-			args:        []string{"--data-dir=/tmp/a", "--data-dir", "/tmp/b"},
-			errContains: "duplicate --data-dir option",
-		},
-		{
-			name:        "data dir missing value",
-			args:        []string{"--data-dir"},
-			errContains: "--data-dir requires a value",
-		},
-		{
-			name:        "data dir empty equals value",
-			args:        []string{"--data-dir="},
-			errContains: "--data-dir requires a value",
 		},
 		{
 			name:         "unsupported option",
@@ -114,8 +87,8 @@ func TestEnsureManifestsDirectoryExists(t *testing.T) {
 		if !strings.Contains(err.Error(), "does not exist") {
 			t.Fatalf("expected does not exist error, got %q", err.Error())
 		}
-		if !strings.Contains(err.Error(), "--data-dir <path>") {
-			t.Fatalf("expected suggestion to use --data-dir, got %q", err.Error())
+		if !strings.Contains(err.Error(), "RKE2_PATCHER_DATA_DIR") {
+			t.Fatalf("expected suggestion to use RKE2_PATCHER_DATA_DIR, got %q", err.Error())
 		}
 	})
 
@@ -134,8 +107,86 @@ func TestEnsureManifestsDirectoryExists(t *testing.T) {
 		if !strings.Contains(err.Error(), "is not a directory") {
 			t.Fatalf("expected not a directory error, got %q", err.Error())
 		}
-		if !strings.Contains(err.Error(), "--data-dir <path>") {
-			t.Fatalf("expected suggestion to use --data-dir, got %q", err.Error())
+		if !strings.Contains(err.Error(), "RKE2_PATCHER_DATA_DIR") {
+			t.Fatalf("expected suggestion to use RKE2_PATCHER_DATA_DIR, got %q", err.Error())
 		}
 	})
+}
+
+func TestParseComparableTag(t *testing.T) {
+	t.Run("version build tag", func(t *testing.T) {
+		tag, ok := parseComparableTag("v1.14.1-build20260206")
+		if !ok {
+			t.Fatalf("expected tag to be parseable")
+		}
+
+		if tag.Major != 1 || tag.Minor != 14 || tag.Patch != 1 || tag.Build != 20260206 {
+			t.Fatalf("unexpected parsed tag: %#v", tag)
+		}
+	})
+
+	t.Run("lts build tag", func(t *testing.T) {
+		tag, ok := parseComparableTag("v1.12.0-lts1-build20250210")
+		if !ok {
+			t.Fatalf("expected lts tag to be parseable")
+		}
+
+		if tag.Flavor != "lts1" {
+			t.Fatalf("unexpected flavor: %q", tag.Flavor)
+		}
+	})
+
+	t.Run("signature tag excluded", func(t *testing.T) {
+		if _, ok := parseComparableTag("sha256-1234.sig"); ok {
+			t.Fatalf("expected signature tag to be excluded")
+		}
+	})
+}
+
+func TestSelectTagsForCVEListing_OrderedAndFiltered(t *testing.T) {
+	tags := []registry.Tag{
+		{Name: "sha256-063f303c.att"},
+		{Name: "sha256-063f303c.sig"},
+		{Name: "v1.10.1-build20230406"},
+		{Name: "v1.12.4-build20251015"},
+		{Name: "v1.14.1-build20260203"},
+		{Name: "v1.14.1-build20260206"},
+		{Name: "v1.14.2-build20260309"},
+	}
+
+	ordered, previous := selectTagsForCVEListing(tags, "v1.14.1-build20260206")
+
+	expectedOrdered := []string{
+		"v1.14.2-build20260309",
+		"v1.14.1-build20260206",
+		"v1.14.1-build20260203",
+	}
+
+	if !reflect.DeepEqual(ordered, expectedOrdered) {
+		t.Fatalf("unexpected ordered tags: %#v", ordered)
+	}
+
+	if previous != "v1.14.1-build20260203" {
+		t.Fatalf("unexpected previous tag: %q", previous)
+	}
+}
+
+func TestOrderedComparableTags(t *testing.T) {
+	tags := []registry.Tag{
+		{Name: "v1.14.1-build20260206"},
+		{Name: "v1.14.2-build20260309"},
+		{Name: "v1.14.1-build20260203"},
+		{Name: "sha256-1234.att"},
+	}
+
+	ordered := orderedComparableTags(tags)
+	expected := []string{
+		"v1.14.2-build20260309",
+		"v1.14.1-build20260206",
+		"v1.14.1-build20260203",
+	}
+
+	if !reflect.DeepEqual(ordered, expected) {
+		t.Fatalf("unexpected ordered tags: %#v", ordered)
+	}
 }

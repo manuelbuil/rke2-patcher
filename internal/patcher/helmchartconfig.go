@@ -11,12 +11,9 @@ import (
 )
 
 const (
-	manifestsDirEnv = "RKE2_PATCHER_MANIFESTS_DIR"
-	dataDirEnv      = "RKE2_PATCHER_DATA_DIR"
+	dataDirEnv = "RKE2_PATCHER_DATA_DIR"
 
-	helmChartConfigFileEnv = "RKE2_PATCHER_HELMCHARTCONFIG_FILE"
-	helmChartConfigNameEnv = "RKE2_PATCHER_HELMCHARTCONFIG_NAME"
-	helmNamespaceEnv       = "RKE2_PATCHER_HELM_NAMESPACE"
+	helmNamespaceEnv = "RKE2_PATCHER_HELM_NAMESPACE"
 
 	defaultDataDir   = "/var/lib/rancher/rke2"
 	defaultNamespace = "kube-system"
@@ -47,8 +44,8 @@ func BuildHelmChartConfig(componentName string, defaultChartConfigName string, i
 func BuildHelmChartConfigWithDataDir(componentName string, defaultChartConfigName string, imageName string, imageTag string, dataDirOverride string) (string, string) {
 	manifestsDir := resolveManifestsDir(dataDirOverride)
 
-	helmChartConfigFile := envOrDefault(helmChartConfigFileEnv, componentName+"-config-rke2-patcher.yaml")
-	helmChartConfigName := envOrDefault(helmChartConfigNameEnv, defaultChartConfigName)
+	helmChartConfigFile := componentName + "-config-rke2-patcher.yaml"
+	helmChartConfigName := defaultChartConfigName
 	namespace := envOrDefault(helmNamespaceEnv, defaultNamespace)
 
 	filePath := filepath.Join(manifestsDir, helmChartConfigFile)
@@ -61,11 +58,6 @@ func resolveManifestsDir(dataDirOverride string) string {
 	trimmedDataDirOverride := strings.TrimSpace(dataDirOverride)
 	if trimmedDataDirOverride != "" {
 		return filepath.Join(trimmedDataDirOverride, "server", "manifests")
-	}
-
-	trimmedManifestsDir := strings.TrimSpace(os.Getenv(manifestsDirEnv))
-	if trimmedManifestsDir != "" {
-		return trimmedManifestsDir
 	}
 
 	dataDir := envOrDefault(dataDirEnv, defaultDataDir)
