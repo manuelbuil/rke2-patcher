@@ -64,7 +64,7 @@ rke2-patcher image-list traefik --with-cves --verbose
 - Lists release tags from the configured registry for the selected component repository, ordered newest-first (higher build date first), with current and previous tags included.
 - Filters out non-release signature/attestation tags (for example `sha256-...*.sig` and `sha256-...*.att`) from `image-list` output.
 - Highlights tags currently in use by running pods as `"<-- in use"` when cluster access is available.
-- With `--with-cves`, prints a compact table with columns: `TAG`, `STATUS`, `UPDATED`, `CVE COUNT`, and `VULNERABILITIES`.
+- With `--with-cves`, prints a compact table with columns: `TAG`, `STATUS`, `CVE COUNT`, and `VULNERABILITIES`.
 - CVEs are collected for: the current image tag, the previous image tag, and all newer available tags.
 - `--with-cves` runs a single in-cluster Trivy job that scans all selected images.
 - If that batch cluster scan fails, the command fails (no per-image fallback path).
@@ -91,6 +91,8 @@ rke2-patcher image-patch traefik --revert
 - With `--dry-run`, prints the exact `HelmChartConfig` that would be written and does not write any file.
 - With `--revert`, moves one image back (to the previous/older tag).
 - Refuses to patch when current tag is already the newest available tag.
+- Refuses to patch when the target tag would move to a newer minor release.
+- Refuses to patch when the same component was already patched forward once for the current detected RKE2 version.
 - Refuses to revert when current tag is already the oldest available tag in the observed list.
 - Refuses to write if the target manifests directory does not exist and suggests setting `RKE2_PATCHER_DATA_DIR`.
 - If one or more `HelmChartConfig` objects already exist in the cluster for the same chart name and namespace, asks for confirmation before attempting a merge.
@@ -139,6 +141,7 @@ General tag-registry override:
 
 - `RKE2_PATCHER_REGISTRY`
   - Registry endpoint used to list available tags for `image-list` and `image-patch`.
+  - Also used by `image-patch` when generating `calico-operator` values (`tigeraOperator.registry`).
   - Default: `registry.rancher.com`
   - Accepted forms: `registry.example.local`, `registry.example.local:5000`, `https://registry.example.local`, `http://registry.example.local:5000`
   - Behavior: tag listing starts unauthenticated, then follows Bearer challenge flow only if the registry returns `401` with `WWW-Authenticate: Bearer ...`.
@@ -155,6 +158,9 @@ The `image-patch` command supports these overrides:
   - RKE2 data directory used to derive the manifest output path.
   - Default: `/var/lib/rancher/rke2`
   - Effective manifests path: `<data-dir>/server/manifests`
+- `RKE2_PATCHER_CACHE_DIR`
+  - Optional directory used to persist patch-limit state (one forward patch per component per RKE2 version).
+  - Default state file path: `<data-dir>/server/rke2-patcher-cache/patch-limit-state.json`
 - `RKE2_PATCHER_HELM_NAMESPACE`
   - `.metadata.namespace` for the generated `HelmChartConfig`.
   - Default: `kube-system`

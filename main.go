@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -17,7 +18,14 @@ import (
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/registry"
 )
 
-const version = "0.4.2"
+const (
+	version                = "0.5.1"
+	defaultRKE2DataDir     = "/var/lib/rancher/rke2"
+	patchLimitCacheDirEnv  = "RKE2_PATCHER_CACHE_DIR"
+	patchLimitStateSubPath = "server/rke2-patcher-cache/patch-limit-state.json"
+)
+
+var clusterVersionResolver = kube.ClusterVersion
 
 type imageListOptions struct {
 	WithCVEs bool
@@ -32,6 +40,24 @@ type cveListEntry struct {
 type imagePatchOptions struct {
 	DryRun bool
 	Revert bool
+}
+
+type patchLimitState struct {
+	Entries map[string]patchLimitEntry `json:"entries"`
+}
+
+type patchLimitEntry struct {
+	Component      string `json:"component"`
+	ClusterVersion string `json:"clusterVersion"`
+	BaselineTag    string `json:"baselineTag"`
+	PatchedToTag   string `json:"patchedToTag"`
+}
+
+type patchLimitDecision struct {
+	ShouldPersist bool
+	StateFilePath string
+	EntryKey      string
+	Entry         patchLimitEntry
 }
 
 func main() {
@@ -248,7 +274,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 			cveByTag[tagName] = cveListEntry{CVEs: result.CVEs}
 		}
 
-		printImageListWithCVEs(component, tagsForSelection, tagsToScan, currentTag, previousTag, cveByTag, options.Verbose)
+		printImageListWithCVEs(component, tagsToScan, currentTag, previousTag, cveByTag, options.Verbose)
 		return nil
 	}
 
@@ -326,6 +352,11 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 	currentImageName, currentImageTag := kube.SplitImage(runningImage)
 
 	targetTagName, err := resolvePatchTargetTag(component.Repository, currentImageTag, options.Revert)
+	if err != nil {
+		return err
+	}
+
+	patchDecision, err := evaluatePatchLimit(component.Name, currentImageTag, targetTagName, options.Revert)
 	if err != nil {
 		return err
 	}
@@ -410,11 +441,150 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return err
 	}
 
+	if err := persistPatchLimitDecision(patchDecision); err != nil {
+		return fmt.Errorf("wrote HelmChartConfig, but failed to persist patch-limit state: %w", err)
+	}
+
 	fmt.Printf("component: %s\n", component.Name)
 	fmt.Printf("current image: %s\n", runningImage)
 	fmt.Printf("current tag: %s\n", currentImageTag)
 	fmt.Printf("new tag: %s\n", targetTagName)
 	fmt.Printf("wrote HelmChartConfig: %s\n", filePath)
+
+	return nil
+}
+
+func evaluatePatchLimit(componentName string, currentTag string, targetTag string, revert bool) (patchLimitDecision, error) {
+	if revert {
+		return patchLimitDecision{}, nil
+	}
+
+	clusterVersion, err := clusterVersionResolver()
+	if err != nil {
+		return patchLimitDecision{}, fmt.Errorf("failed to resolve cluster version for patch-limit check: %w", err)
+	}
+
+	stateFilePath := patchLimitStateFilePath()
+	state, err := loadPatchLimitState(stateFilePath)
+	if err != nil {
+		return patchLimitDecision{}, err
+	}
+
+	entryKey := patchLimitEntryKey(clusterVersion, componentName)
+	if existing, found := state.Entries[entryKey]; found {
+		return patchLimitDecision{}, fmt.Errorf("refusing to patch: component %q was already patched once for RKE2 %s (baseline: %q, patched-to: %q); upgrade RKE2 to patch again", componentName, clusterVersion, existing.BaselineTag, existing.PatchedToTag)
+	}
+
+	entry := patchLimitEntry{
+		Component:      componentName,
+		ClusterVersion: clusterVersion,
+		BaselineTag:    currentTag,
+		PatchedToTag:   targetTag,
+	}
+
+	return patchLimitDecision{
+		ShouldPersist: true,
+		StateFilePath: stateFilePath,
+		EntryKey:      entryKey,
+		Entry:         entry,
+	}, nil
+}
+
+func persistPatchLimitDecision(decision patchLimitDecision) error {
+	if !decision.ShouldPersist {
+		return nil
+	}
+
+	state, err := loadPatchLimitState(decision.StateFilePath)
+	if err != nil {
+		return err
+	}
+
+	if existing, found := state.Entries[decision.EntryKey]; found {
+		if existing.PatchedToTag == decision.Entry.PatchedToTag && existing.BaselineTag == decision.Entry.BaselineTag {
+			return nil
+		}
+
+		return fmt.Errorf("component %q is already recorded as patched once for RKE2 %s", existing.Component, existing.ClusterVersion)
+	}
+
+	state.Entries[decision.EntryKey] = decision.Entry
+
+	if err := savePatchLimitState(decision.StateFilePath, state); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func patchLimitStateFilePath() string {
+	cacheDir := strings.TrimSpace(os.Getenv(patchLimitCacheDirEnv))
+	if cacheDir != "" {
+		return filepath.Join(cacheDir, "patch-limit-state.json")
+	}
+
+	dataDir := strings.TrimSpace(os.Getenv("RKE2_PATCHER_DATA_DIR"))
+	if dataDir == "" {
+		dataDir = defaultRKE2DataDir
+	}
+
+	return filepath.Join(dataDir, patchLimitStateSubPath)
+}
+
+func patchLimitEntryKey(clusterVersion string, componentName string) string {
+	return strings.TrimSpace(clusterVersion) + "|" + strings.ToLower(strings.TrimSpace(componentName))
+}
+
+func loadPatchLimitState(filePath string) (patchLimitState, error) {
+	state := patchLimitState{Entries: map[string]patchLimitEntry{}}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return state, nil
+		}
+
+		return patchLimitState{}, fmt.Errorf("failed to read patch-limit state file %q: %w", filePath, err)
+	}
+
+	if strings.TrimSpace(string(content)) == "" {
+		return state, nil
+	}
+
+	if err := json.Unmarshal(content, &state); err != nil {
+		return patchLimitState{}, fmt.Errorf("failed to parse patch-limit state file %q: %w", filePath, err)
+	}
+
+	if state.Entries == nil {
+		state.Entries = map[string]patchLimitEntry{}
+	}
+
+	return state, nil
+}
+
+func savePatchLimitState(filePath string, state patchLimitState) error {
+	if state.Entries == nil {
+		state.Entries = map[string]patchLimitEntry{}
+	}
+
+	content, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize patch-limit state: %w", err)
+	}
+
+	stateDir := filepath.Dir(filePath)
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		return fmt.Errorf("failed to create patch-limit state directory %q: %w", stateDir, err)
+	}
+
+	tmpPath := filePath + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
+		return fmt.Errorf("failed to write temporary patch-limit state file %q: %w", tmpPath, err)
+	}
+
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		return fmt.Errorf("failed to replace patch-limit state file %q: %w", filePath, err)
+	}
 
 	return nil
 }
@@ -496,7 +666,31 @@ func resolvePatchTargetTag(repository string, currentTag string, revert bool) (s
 		return "", fmt.Errorf("refusing to patch: current tag %q is already the latest", currentTag)
 	}
 
-	return orderedTags[targetIndex], nil
+	targetTag := orderedTags[targetIndex]
+
+	currentComparable, currentParseOK := parseComparableTag(currentTag)
+	if !currentParseOK {
+		return "", fmt.Errorf("refusing to patch: current tag %q cannot be compared for minor compatibility", currentTag)
+	}
+
+	targetComparable, targetParseOK := parseComparableTag(targetTag)
+	if !targetParseOK {
+		return "", fmt.Errorf("refusing to patch: target tag %q cannot be compared for minor compatibility", targetTag)
+	}
+
+	if isNewerMinorRelease(currentComparable, targetComparable) {
+		return "", fmt.Errorf("refusing to patch: moving to a newer minor release is not supported (current: %q, target: %q)", currentTag, targetTag)
+	}
+
+	return targetTag, nil
+}
+
+func isNewerMinorRelease(current comparableTag, target comparableTag) bool {
+	if target.Major != current.Major {
+		return target.Major > current.Major
+	}
+
+	return target.Minor > current.Minor
 }
 
 func listRunningImagesForComponent(component components.Component) ([]kube.PodImageSummary, error) {
@@ -678,15 +872,10 @@ func parseComparableTag(tagName string) (comparableTag, bool) {
 	}, true
 }
 
-func printImageListWithCVEs(component components.Component, tags []registry.Tag, tagsToScan []string, currentTag string, previousTag string, cveByTag map[string]cveListEntry, verbose bool) {
-	tagInfoByName := make(map[string]registry.Tag, len(tags))
-	for _, tag := range tags {
-		tagInfoByName[tag.Name] = tag
-	}
-
+func printImageListWithCVEs(component components.Component, tagsToScan []string, currentTag string, previousTag string, cveByTag map[string]cveListEntry, verbose bool) {
 	fmt.Printf("COMPONENT:  %s\n", component.Name)
 	fmt.Printf("REPOSITORY: %s\n\n", component.Repository)
-	fmt.Printf("%-24s %-10s %-12s %-10s %s\n", "TAG", "STATUS", "UPDATED", "CVE COUNT", "VULNERABILITIES")
+	fmt.Printf("%-24s %-10s %-10s %s\n", "TAG", "STATUS", "CVE COUNT", "VULNERABILITIES")
 
 	for _, tagName := range tagsToScan {
 		status := "NEWER"
@@ -697,13 +886,8 @@ func printImageListWithCVEs(component components.Component, tags []registry.Tag,
 			status = "PREVIOUS"
 		}
 
-		updated := "-"
-		if tagInfo, found := tagInfoByName[tagName]; found && !tagInfo.LastUpdated.IsZero() {
-			updated = tagInfo.LastUpdated.Format("2006-01-02")
-		}
-
 		count, vulnerabilities := renderCVESummary(cveByTag[tagName], verbose)
-		fmt.Printf("%-24s %-10s %-12s %-10s %s\n", tagName, status, updated, count, vulnerabilities)
+		fmt.Printf("%-24s %-10s %-10s %s\n", tagName, status, count, vulnerabilities)
 	}
 }
 
@@ -762,6 +946,7 @@ func printUsage() {
 	fmt.Println("  KUBECONFIG                         kubeconfig path (first file in list is used)")
 	fmt.Println("  RKE2_PATCHER_REGISTRY              registry base URL (default: registry.rancher.com)")
 	fmt.Println("  RKE2_PATCHER_DATA_DIR              path to RKE2 data directory")
+	fmt.Println("  RKE2_PATCHER_CACHE_DIR             path to cache directory for patch-limit state")
 	fmt.Println("  RKE2_PATCHER_HELM_NAMESPACE        Helm namespace override")
 	fmt.Println("  RKE2_PATCHER_CVE_MODE              CVE scanner mode (cluster|local)")
 	fmt.Println("  RKE2_PATCHER_CVE_NAMESPACE         namespace for the CVE scanner job")

@@ -3,6 +3,7 @@ package patcher
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,12 +12,14 @@ import (
 )
 
 const (
-	dataDirEnv = "RKE2_PATCHER_DATA_DIR"
+	dataDirEnv  = "RKE2_PATCHER_DATA_DIR"
+	registryEnv = "RKE2_PATCHER_REGISTRY"
 
 	helmNamespaceEnv = "RKE2_PATCHER_HELM_NAMESPACE"
 
-	defaultDataDir   = "/var/lib/rancher/rke2"
-	defaultNamespace = "kube-system"
+	defaultDataDir      = "/var/lib/rancher/rke2"
+	defaultNamespace    = "kube-system"
+	defaultRegistryHost = "registry.rancher.com"
 )
 
 func WriteHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, error) {
@@ -335,15 +338,17 @@ spec:
 
 func renderValuesContent(componentName string, chartName string, imageName string, imageTag string) string {
 	if strings.EqualFold(strings.TrimSpace(componentName), "calico-operator") || strings.EqualFold(strings.TrimSpace(chartName), "rke2-calico") {
-		image := strings.TrimPrefix(strings.TrimSpace(imageName), "docker.io/")
+		image := imageRepositoryWithoutRegistry(imageName)
 		if image == "" {
-			image = imageName
+			image = strings.TrimSpace(imageName)
 		}
+
+		registryHost := configuredRegistryHost()
 
 		return fmt.Sprintf(`    tigeraOperator:
       image: %s
       version: %s
-      registry: docker.io`, image, imageTag)
+	      registry: %s`, image, imageTag, registryHost)
 	}
 
 	if strings.EqualFold(strings.TrimSpace(componentName), "ingress-nginx") || strings.EqualFold(strings.TrimSpace(chartName), "rke2-ingress-nginx") {
@@ -400,4 +405,67 @@ func envOrDefault(key string, fallback string) string {
 	}
 
 	return value
+}
+
+func configuredRegistryHost() string {
+	rawValue := strings.TrimSpace(os.Getenv(registryEnv))
+	if rawValue == "" {
+		rawValue = defaultRegistryHost
+	}
+
+	host := registryHostFromValue(rawValue)
+	if strings.TrimSpace(host) == "" {
+		return defaultRegistryHost
+	}
+
+	return host
+}
+
+func registryHostFromValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	if strings.Contains(trimmed, "://") {
+		parsed, err := url.Parse(trimmed)
+		if err == nil {
+			host := strings.TrimSpace(parsed.Host)
+			if host != "" {
+				return host
+			}
+		}
+	}
+
+	trimmed = strings.Trim(trimmed, "/")
+	if trimmed == "" {
+		return ""
+	}
+
+	firstSlash := strings.Index(trimmed, "/")
+	if firstSlash >= 0 {
+		return strings.TrimSpace(trimmed[:firstSlash])
+	}
+
+	return trimmed
+}
+
+func imageRepositoryWithoutRegistry(imageName string) string {
+	trimmed := strings.TrimSpace(imageName)
+	if trimmed == "" {
+		return ""
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 {
+		return trimmed
+	}
+
+	first := strings.ToLower(parts[0])
+	hasRegistryPrefix := strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost"
+	if !hasRegistryPrefix {
+		return trimmed
+	}
+
+	return strings.Join(parts[1:], "/")
 }
