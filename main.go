@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	version                = "0.6.3"
+	version                = "0.6.4"
 	defaultRKE2DataDir     = "/var/lib/rancher/rke2"
 	patchLimitCacheDirEnv  = "RKE2_PATCHER_CACHE_DIR"
 	patchLimitStateSubPath = "server/rke2-patcher-cache/patch-limit-state.json"
@@ -184,24 +184,19 @@ func parseImageListOptions(args []string) (imageListOptions, error) {
 
 // runCVE lists CVEs for the image of the component
 func runCVE(component components.Component) error {
-	scannerMode := ""
-	if err := kube.EnsureWorkloadExists(component.Workload); err != nil {
-		return err
-	}
-
 	runningImages, err := kube.ListRunningImages(component.Workload, component.Repository)
 	if err != nil {
-		return err
+		return fmt.Errorf("running image unavailable: %w", err)
 	}
 
 	image := runningImages[0].Image
-	effectiveScannerMode, err := cve.ResolveScanMode(scannerMode)
+	effectiveScannerMode, err := cve.ResolveScanMode()
 	if err != nil {
 		return err
 	}
 	log.Printf("scanner mode: %s", effectiveScannerMode)
 
-	result, err := cve.ListForImageWithMode(image, effectiveScannerMode)
+	result, err := cve.ListForImage(image)
 	if err != nil {
 		return fmt.Errorf("failed to scan image %q: %w", image, err)
 	}
@@ -252,7 +247,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 			targetImages = append(targetImages, fmt.Sprintf("%s:%s", currentImageName, tagName))
 		}
 
-		resultsByImage, errorsByImage, scanErr := cve.ListForImagesWithMode(targetImages, "")
+		resultsByImage, errorsByImage, scanErr := cve.ListForImages(targetImages)
 		if scanErr != nil {
 			return scanErr
 		}
@@ -340,13 +335,9 @@ func runImageList(component components.Component, options imageListOptions) erro
 }
 
 func runImagePatch(component components.Component, options imagePatchOptions) error {
-	if err := kube.EnsureWorkloadExists(component.Workload); err != nil {
-		return err
-	}
-
 	runningImages, err := kube.ListRunningImages(component.Workload, component.Repository)
 	if err != nil {
-		return err
+		return fmt.Errorf("running image unavailable: %w", err)
 	}
 
 	runningImage := runningImages[0].Image

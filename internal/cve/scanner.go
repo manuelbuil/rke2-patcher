@@ -36,19 +36,36 @@ type Result struct {
 
 var (
 	scanImagesWithTrivyJob = kube.ScanImagesWithTrivyJob
-	listForImageWithMode   = ListForImageWithMode
+	listForImageLocal      = scanImageLocally
 )
 
 func ListForImage(image string) (Result, error) {
-	return ListForImageWithMode(image, "")
+	mode, err := resolveScanMode()
+	if err != nil {
+		return Result{}, err
+	}
+
+	if mode == "local" {
+		return listForImageLocal(image)
+	}
+
+	output, scanErr := kube.ScanImageWithTrivyJob(image, true)
+	if scanErr == nil {
+		cves, parseErr := trivyCVEsFromJSON(output)
+		if parseErr == nil {
+			return Result{Tool: "trivy-job", CVEs: cves}, nil
+		}
+		scanErr = parseErr
+	}
+	return Result{}, fmt.Errorf("cluster scanner failed: %v", scanErr)
 }
 
-func ResolveScanMode(modeOverride string) (string, error) {
-	return resolveScanMode(modeOverride)
+func ResolveScanMode() (string, error) {
+	return resolveScanMode()
 }
 
-func ListForImagesWithMode(images []string, modeOverride string) (map[string]Result, map[string]error, error) {
-	mode, err := resolveScanMode(modeOverride)
+func ListForImages(images []string) (map[string]Result, map[string]error, error) {
+	mode, err := resolveScanMode()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -71,7 +88,7 @@ func ListForImagesWithMode(images []string, modeOverride string) (map[string]Res
 		errorsByImage := make(map[string]error)
 
 		for _, image := range targetImages {
-			result, scanErr := listForImageWithMode(image, "local")
+			result, scanErr := listForImageLocal(image)
 			if scanErr != nil {
 				errorsByImage[image] = scanErr
 				continue
@@ -183,52 +200,27 @@ func listForImagesInCluster(targetImages []string) (map[string]Result, map[strin
 	return results, errorsByImage, nil
 }
 
-func ListForImageWithMode(image string, modeOverride string) (Result, error) {
-	mode, err := resolveScanMode(modeOverride)
-	if err != nil {
-		return Result{}, err
-	}
-
+func scanImageLocally(image string) (Result, error) {
 	errorsByMode := make([]string, 0)
 
-	if mode == "cluster" {
-		output, scanErr := kube.ScanImageWithTrivyJob(image, mode == "cluster")
+	if _, lookErr := exec.LookPath("trivy"); lookErr == nil {
+		cves, scanErr := trivyCVEs(image)
 		if scanErr == nil {
-			cves, parseErr := trivyCVEsFromJSON(output)
-			if parseErr == nil {
-				return Result{Tool: "trivy-job", CVEs: cves}, nil
-			}
-			scanErr = parseErr
+			return Result{Tool: "trivy", CVEs: cves}, nil
 		}
-
-		errorsByMode = append(errorsByMode, fmt.Sprintf("cluster scanner failed: %v", scanErr))
-		return Result{}, fmt.Errorf("%s", strings.Join(errorsByMode, "; "))
+		errorsByMode = append(errorsByMode, fmt.Sprintf("local trivy failed: %v", scanErr))
 	}
 
-	if mode == "local" {
-		if _, lookErr := exec.LookPath("trivy"); lookErr == nil {
-			cves, scanErr := trivyCVEs(image)
-			if scanErr == nil {
-				return Result{Tool: "trivy", CVEs: cves}, nil
-			}
-			errorsByMode = append(errorsByMode, fmt.Sprintf("local trivy failed: %v", scanErr))
+	if _, lookErr := exec.LookPath("grype"); lookErr == nil {
+		cves, scanErr := grypeCVEs(image)
+		if scanErr == nil {
+			return Result{Tool: "grype", CVEs: cves}, nil
 		}
-
-		if _, lookErr := exec.LookPath("grype"); lookErr == nil {
-			cves, scanErr := grypeCVEs(image)
-			if scanErr == nil {
-				return Result{Tool: "grype", CVEs: cves}, nil
-			}
-			errorsByMode = append(errorsByMode, fmt.Sprintf("local grype failed: %v", scanErr))
-		}
-
-		if len(errorsByMode) == 0 {
-			return Result{}, fmt.Errorf("no local scanner available: install trivy or grype")
-		}
+		errorsByMode = append(errorsByMode, fmt.Sprintf("local grype failed: %v", scanErr))
 	}
 
 	if len(errorsByMode) == 0 {
-		return Result{}, fmt.Errorf("no scanner available")
+		return Result{}, fmt.Errorf("no local scanner available: install trivy or grype")
 	}
 
 	return Result{}, fmt.Errorf("%s", strings.Join(errorsByMode, "; "))
@@ -338,11 +330,8 @@ func downloadVEXFileOnce(vexDirectory string, vexFilePath string) error {
 	return nil
 }
 
-func resolveScanMode(modeOverride string) (string, error) {
-	mode := strings.ToLower(strings.TrimSpace(modeOverride))
-	if mode == "" {
-		mode = strings.ToLower(strings.TrimSpace(os.Getenv(cveModeEnv)))
-	}
+func resolveScanMode() (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(cveModeEnv)))
 	if mode == "" {
 		return "cluster", nil
 	}

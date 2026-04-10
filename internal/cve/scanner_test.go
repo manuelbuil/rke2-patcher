@@ -6,14 +6,14 @@ import (
 	"testing"
 )
 
-func TestListForImagesWithMode_LocalModeFromEnvUsesLocalScanner(t *testing.T) {
+func TestListForImages_LocalModeFromEnvUsesLocalScanner(t *testing.T) {
 	t.Setenv(cveModeEnv, "local")
 
 	originalClusterScanner := scanImagesWithTrivyJob
-	originalSingleScanner := listForImageWithMode
+	originalSingleScanner := listForImageLocal
 	t.Cleanup(func() {
 		scanImagesWithTrivyJob = originalClusterScanner
-		listForImageWithMode = originalSingleScanner
+		listForImageLocal = originalSingleScanner
 	})
 
 	clusterCalled := false
@@ -22,11 +22,7 @@ func TestListForImagesWithMode_LocalModeFromEnvUsesLocalScanner(t *testing.T) {
 		return nil, errors.New("cluster scanner should not be called in local mode")
 	}
 
-	listForImageWithMode = func(image string, modeOverride string) (Result, error) {
-		if modeOverride != "local" {
-			t.Fatalf("expected local mode override, got %q", modeOverride)
-		}
-
+	listForImageLocal = func(image string) (Result, error) {
 		switch image {
 		case "img-ok":
 			return Result{Tool: "trivy", CVEs: []string{"CVE-1"}}, nil
@@ -37,7 +33,7 @@ func TestListForImagesWithMode_LocalModeFromEnvUsesLocalScanner(t *testing.T) {
 		}
 	}
 
-	results, errorsByImage, err := ListForImagesWithMode([]string{"img-ok", "img-fail"}, "")
+	results, errorsByImage, err := ListForImages([]string{"img-ok", "img-fail"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,16 +57,16 @@ func TestListForImagesWithMode_LocalModeFromEnvUsesLocalScanner(t *testing.T) {
 	}
 }
 
-func TestListForImagesWithMode_ClusterModeUsesBatchScanner(t *testing.T) {
+func TestListForImages_ClusterModeUsesBatchScanner(t *testing.T) {
 	originalClusterScanner := scanImagesWithTrivyJob
-	originalSingleScanner := listForImageWithMode
+	originalSingleScanner := listForImageLocal
 	t.Cleanup(func() {
 		scanImagesWithTrivyJob = originalClusterScanner
-		listForImageWithMode = originalSingleScanner
+		listForImageLocal = originalSingleScanner
 	})
 
 	localCalled := false
-	listForImageWithMode = func(_ string, _ string) (Result, error) {
+	listForImageLocal = func(_ string) (Result, error) {
 		localCalled = true
 		return Result{}, errors.New("local scanner should not be called in cluster mode")
 	}
@@ -84,7 +80,7 @@ func TestListForImagesWithMode_ClusterModeUsesBatchScanner(t *testing.T) {
 		return []byte("__RKE2_PATCHER_TRIVY_BEGIN__img-a\n{\"Results\":[{\"Vulnerabilities\":[{\"VulnerabilityID\":\"CVE-A\"}]}]}\n__RKE2_PATCHER_TRIVY_RC__img-a__0\n__RKE2_PATCHER_TRIVY_END__img-a\n"), nil
 	}
 
-	results, errorsByImage, err := ListForImagesWithMode([]string{"img-a"}, "cluster")
+	results, errorsByImage, err := ListForImages([]string{"img-a"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

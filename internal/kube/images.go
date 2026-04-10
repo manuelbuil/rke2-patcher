@@ -43,11 +43,6 @@ type workloadGetResponse struct {
 }
 
 func ListRunningImages(workload components.WorkloadRef, componentRepository string) ([]PodImageSummary, error) {
-	trimmedRepo := strings.TrimSpace(componentRepository)
-	if trimmedRepo == "" {
-		return nil, fmt.Errorf("component repository cannot be empty")
-	}
-
 	api, err := kubeAPIClient()
 	if err != nil {
 		return nil, err
@@ -55,17 +50,9 @@ func ListRunningImages(workload components.WorkloadRef, componentRepository stri
 
 	counts := make(map[string]int)
 
-	namespace := strings.TrimSpace(workload.Namespace)
-	if namespace == "" {
-		namespace = "kube-system"
-	}
-
-	kind := strings.ToLower(strings.TrimSpace(workload.Kind))
-	name := strings.TrimSpace(workload.Name)
-	if kind == "" || name == "" {
-		return nil, fmt.Errorf("invalid workload reference configured")
-	}
-
+	namespace := workload.Namespace
+	kind := workload.Kind
+	name := workload.Name
 	checked := fmt.Sprintf("%s/%s/%s", kind, namespace, name)
 
 	selector, selectorErr := workloadSelector(api, kind, namespace, name)
@@ -86,13 +73,13 @@ func ListRunningImages(workload components.WorkloadRef, componentRepository stri
 			}
 
 			for _, container := range item.Spec.InitContainers {
-				if imageBelongsToRepository(container.Image, trimmedRepo) {
+				if imageBelongsToRepository(container.Image, componentRepository) {
 					counts[container.Image]++
 				}
 			}
 
 			for _, container := range item.Spec.Containers {
-				if imageBelongsToRepository(container.Image, trimmedRepo) {
+				if imageBelongsToRepository(container.Image, componentRepository) {
 					counts[container.Image]++
 				}
 			}
@@ -122,71 +109,6 @@ func ListRunningImages(workload components.WorkloadRef, componentRepository stri
 	})
 
 	return images, nil
-}
-
-// EnsureWorkloadExists queries kube-api to check if the provided workload exists
-func EnsureWorkloadExists(workload components.WorkloadRef) error {
-	api, err := kubeAPIClient()
-	if err != nil {
-		return err
-	}
-
-	namespace := strings.TrimSpace(workload.Namespace)
-	if namespace == "" {
-		namespace = "kube-system"
-	}
-
-	kind := strings.ToLower(strings.TrimSpace(workload.Kind))
-	name := strings.TrimSpace(workload.Name)
-	if kind == "" || name == "" {
-		return fmt.Errorf("invalid workload reference configured")
-	}
-
-	exists, checkErr := workloadExists(api, kind, namespace, name)
-	if checkErr != nil {
-		return checkErr
-	}
-
-	if exists {
-		return nil
-	}
-
-	checked := fmt.Sprintf("%s/%s/%s", kind, namespace, name)
-
-	return fmt.Errorf("component workload not found in cluster (checked: %s)", checked)
-}
-
-func listPodsPage(api kubeAPI, continueToken string) (podList, error) {
-	requestURL := api.BaseURL + "/api/v1/pods?limit=500"
-	if strings.TrimSpace(continueToken) != "" {
-		requestURL += "&continue=" + url.QueryEscape(continueToken)
-	}
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	if err != nil {
-		return podList{}, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return podList{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return podList{}, fmt.Errorf("kube api returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var list podList
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return podList{}, err
-	}
-
-	return list, nil
 }
 
 func listPodsByNamespaceAndSelectorPage(api kubeAPI, namespace string, selector string, continueToken string) (podList, error) {
@@ -281,51 +203,6 @@ func workloadSelector(api kubeAPI, kind string, namespace string, name string) (
 	}
 
 	return strings.Join(selectorParts, ","), nil
-}
-
-// workloadExists contacts kube-api to check if a workload of a specific kind, namespace and name exists in the cluster
-func workloadExists(api kubeAPI, kind string, namespace string, name string) (bool, error) {
-	resource := ""
-	switch kind {
-	case "daemonset":
-		resource = "daemonsets"
-	case "deployment":
-		resource = "deployments"
-	default:
-		return false, fmt.Errorf("unsupported workload kind %q", kind)
-	}
-
-	requestURL := fmt.Sprintf(
-		"%s/apis/apps/v1/namespaces/%s/%s/%s",
-		api.BaseURL,
-		url.PathEscape(namespace),
-		resource,
-		url.PathEscape(name),
-	)
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	if err != nil {
-		return false, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return false, fmt.Errorf("kube api returned status %d when checking %s/%s/%s: %s", resp.StatusCode, kind, namespace, name, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	return true, nil
 }
 
 func imageBelongsToRepository(image string, componentRepository string) bool {
