@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	version                = "0.6.4"
+	version                = "0.7.0"
 	defaultRKE2DataDir     = "/var/lib/rancher/rke2"
 	patchLimitCacheDirEnv  = "RKE2_PATCHER_CACHE_DIR"
 	patchLimitStateSubPath = "server/rke2-patcher-cache/patch-limit-state.json"
@@ -189,12 +189,8 @@ func runCVE(component components.Component) error {
 		return fmt.Errorf("running image unavailable: %w", err)
 	}
 
+	// runningImages is ordered by count, so the first image is the most used one
 	image := runningImages[0].Image
-	effectiveScannerMode, err := cve.ResolveScanMode()
-	if err != nil {
-		return err
-	}
-	log.Printf("scanner mode: %s", effectiveScannerMode)
 
 	result, err := cve.ListForImage(image)
 	if err != nil {
@@ -203,7 +199,6 @@ func runCVE(component components.Component) error {
 
 	fmt.Printf("component: %s\n", component.Name)
 	fmt.Printf("image: %s\n", image)
-	fmt.Printf("scanner mode: %s\n", effectiveScannerMode)
 	fmt.Printf("scanner: %s\n", result.Tool)
 
 	if len(result.CVEs) == 0 {

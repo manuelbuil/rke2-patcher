@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ const (
 	vexReportURL         = "https://raw.githubusercontent.com/rancher/vexhub/refs/heads/main/reports/rancher.openvex.json"
 	vexFileName          = "rancher.openvex.json"
 	vexDownloadAttempts  = 3
+	vexMaxFileAge        = 24 * time.Hour
 )
 
 type Result struct {
@@ -34,6 +36,7 @@ type Result struct {
 	CVEs []string
 }
 
+// Indirection created to allow test mocking
 var (
 	scanImagesWithTrivyJob = kube.ScanImagesWithTrivyJob
 	listForImageLocal      = scanImageLocally
@@ -60,6 +63,7 @@ func ListForImage(image string) (Result, error) {
 	return Result{}, fmt.Errorf("cluster scanner failed: %v", scanErr)
 }
 
+// ResolveScanMode resolves what scan mode we use
 func ResolveScanMode() (string, error) {
 	return resolveScanMode()
 }
@@ -277,10 +281,26 @@ func ensureLocalTrivyVEXFile() (string, error) {
 
 	vexFilePath := filepath.Join(vexDirectory, vexFileName)
 
+	existingInfo, statErr := os.Stat(vexFilePath)
+	hasExistingFile := false
+	if statErr == nil {
+		hasExistingFile = true
+		age := time.Since(existingInfo.ModTime())
+		if age <= vexMaxFileAge {
+			log.Printf("using existing VEX file %q (age %s)", vexFilePath, age.Round(time.Second))
+			return vexFilePath, nil
+		}
+
+		log.Printf("existing VEX file %q is older than %s (age %s); attempting to refresh", vexFilePath, vexMaxFileAge, age.Round(time.Second))
+	} else if !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("failed to check local VEX file %q: %w", vexFilePath, statErr)
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= vexDownloadAttempts; attempt++ {
 		err = downloadVEXFileOnce(vexDirectory, vexFilePath)
 		if err == nil {
+			log.Printf("downloaded VEX file to %q", vexFilePath)
 			return vexFilePath, nil
 		}
 
@@ -290,9 +310,15 @@ func ensureLocalTrivyVEXFile() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("failed to download vex report from %q after %d attempts: %w", vexReportURL, vexDownloadAttempts, lastErr)
+	if hasExistingFile {
+		log.Printf("failed to refresh VEX file after %d attempts: %v; using old VEX file %q", vexDownloadAttempts, lastErr, vexFilePath)
+		return vexFilePath, nil
+	}
+
+	return "", fmt.Errorf("failed to download vex report from %q after %d attempts and no local VEX file is available; local Trivy scan requires the VEX file: %w", vexReportURL, vexDownloadAttempts, lastErr)
 }
 
+// downloadVEXFileOnce downloads the VEX file from the hardcoded URL and saves it to the given path
 func downloadVEXFileOnce(vexDirectory string, vexFilePath string) error {
 	response, err := http.Get(vexReportURL)
 	if err != nil {
@@ -330,6 +356,7 @@ func downloadVEXFileOnce(vexDirectory string, vexFilePath string) error {
 	return nil
 }
 
+// resolveScanMode determines the scan mode based on the RKE2_PATCHER_CVE_MODE environment variable
 func resolveScanMode() (string, error) {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv(cveModeEnv)))
 	if mode == "" {

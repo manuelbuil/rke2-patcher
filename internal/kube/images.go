@@ -42,27 +42,25 @@ type workloadGetResponse struct {
 	} `json:"spec"`
 }
 
-func ListRunningImages(workload components.WorkloadRef, componentRepository string) ([]PodImageSummary, error) {
+// ListRunningImages lists the images used by the running pods of a component (e.g. different versions during an upgrade)
+func ListRunningImages(componentWorkload components.WorkloadRef, componentRepository string) ([]PodImageSummary, error) {
 	api, err := kubeAPIClient()
 	if err != nil {
 		return nil, err
 	}
 
+	// Counts the number of occurences of each image (e.g. different versions)
 	counts := make(map[string]int)
 
-	namespace := workload.Namespace
-	kind := workload.Kind
-	name := workload.Name
-	checked := fmt.Sprintf("%s/%s/%s", kind, namespace, name)
-
-	selector, selectorErr := workloadSelector(api, kind, namespace, name)
+	selector, selectorErr := workloadSelector(api, componentWorkload.Kind, componentWorkload.Namespace, componentWorkload.Name)
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
 
+	// In case there are more than 500 pods in the cluster we paginate results with continueToken
 	continueToken := ""
 	for {
-		list, listErr := listPodsByNamespaceAndSelectorPage(api, namespace, selector, continueToken)
+		list, listErr := listPods(api, componentWorkload.Namespace, selector, continueToken)
 		if listErr != nil {
 			return nil, listErr
 		}
@@ -91,6 +89,7 @@ func ListRunningImages(workload components.WorkloadRef, componentRepository stri
 		continueToken = list.Continue
 	}
 
+	checked := fmt.Sprintf("%s/%s/%s", componentWorkload.Kind, componentWorkload.Namespace, componentWorkload.Name)
 	if len(counts) == 0 {
 		return nil, fmt.Errorf("no running image found in configured workload for repository %q (checked: %s)", componentRepository, checked)
 	}
@@ -100,6 +99,7 @@ func ListRunningImages(workload components.WorkloadRef, componentRepository stri
 		images = append(images, PodImageSummary{Image: image, Count: count})
 	}
 
+	// Orders images by count
 	sort.Slice(images, func(i int, j int) bool {
 		if images[i].Count == images[j].Count {
 			return images[i].Image < images[j].Image
@@ -111,11 +111,10 @@ func ListRunningImages(workload components.WorkloadRef, componentRepository stri
 	return images, nil
 }
 
-func listPodsByNamespaceAndSelectorPage(api kubeAPI, namespace string, selector string, continueToken string) (podList, error) {
+// listPods calls kube-api to list pods in the given namespace with the given label selector
+func listPods(api kubeAPI, namespace string, selector string, continueToken string) (podList, error) {
 	requestURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods?limit=500", api.BaseURL, url.PathEscape(namespace))
-	if strings.TrimSpace(selector) != "" {
-		requestURL += "&labelSelector=" + url.QueryEscape(selector)
-	}
+	requestURL += "&labelSelector=" + url.QueryEscape(selector)
 	if strings.TrimSpace(continueToken) != "" {
 		requestURL += "&continue=" + url.QueryEscape(continueToken)
 	}
@@ -147,6 +146,8 @@ func listPodsByNamespaceAndSelectorPage(api kubeAPI, namespace string, selector 
 	return list, nil
 }
 
+// workloadSelector calls kube-api to get the selector of a workload. That selector is used to find the
+// pods of the workload and their images (normally a label)
 func workloadSelector(api kubeAPI, kind string, namespace string, name string) (string, error) {
 	resource := ""
 	switch kind {
@@ -205,6 +206,7 @@ func workloadSelector(api kubeAPI, kind string, namespace string, name string) (
 	return strings.Join(selectorParts, ","), nil
 }
 
+// imageBelongsToRepository checks if the given image belongs to the given repository of the component. 
 func imageBelongsToRepository(image string, componentRepository string) bool {
 	imageRepository := imageNameWithoutTagOrDigest(image)
 	if imageRepository == componentRepository {
@@ -214,7 +216,9 @@ func imageBelongsToRepository(image string, componentRepository string) bool {
 	return strings.HasSuffix(imageRepository, "/"+componentRepository)
 }
 
-// imageNameWithoutTagOrDigest returns the image name without the tag or digest, if present. For example, "rancher/hardened-flannel:v0.1.0" and "rancher/hardened-flannel@sha256:abc123" would both return "rancher/hardened-flannel"
+// imageNameWithoutTagOrDigest returns the image name without the tag or digest, if present. 
+// For example, "rancher/hardened-flannel:v0.1.0" and "rancher/hardened-flannel@sha256:abc123" would 
+// both return "rancher/hardened-flannel"
 func imageNameWithoutTagOrDigest(image string) string {
 	trimmed := strings.TrimSpace(image)
 	if idx := strings.Index(trimmed, "@"); idx >= 0 {
