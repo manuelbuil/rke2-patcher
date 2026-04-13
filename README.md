@@ -42,10 +42,15 @@ rke2-patcher image-cve traefik
 ```
 
 - Looks up the current running image in the cluster for the selected component.
-- Verifies the component workload exists in `kube-system` (DaemonSet/Deployment mapping).
 - Scans it for CVEs using an in-cluster Kubernetes `Job` that runs `trivy`.
 - Uses cluster mode by default (`RKE2_PATCHER_CVE_MODE=cluster`).
 - In cluster mode, if the target scan namespace does not exist, the tool asks whether it should create it and creates it on confirmation.
+- In local mode (`RKE2_PATCHER_CVE_MODE=local`), it tries local scanners in order: `trivy` first, then `grype` as fallback.
+- `grype` support is experimental.
+- In local mode, both `trivy` and `grype` use a shared local VEX file at `$HOME/rke2-patcher-cache/vex/rancher.openvex.json`:
+  - if the file exists and is newer than 24 hours, it is reused (no download)
+  - if the file exists but is older than 24 hours, a refresh is attempted (up to 3 tries); on failure, the stale local file is still used
+  - if the file does not exist, download is attempted (up to 3 tries); if all fail, local scan errors
 
 ### 2) List available images (tags)
 
@@ -86,7 +91,6 @@ rke2-patcher image-patch traefik --revert
 ```
 
 - Detects the current running image repository in-cluster.
-- Verifies the component workload exists in `kube-system` (DaemonSet/Deployment mapping).
 - Picks the next newer tag from `registry.rancher.com` and writes a `HelmChartConfig` manifest with that tag.
 - With `--dry-run`, prints the exact `HelmChartConfig` that would be written and does not write any file.
 - With `--revert`, moves one image back (to the previous/older tag).
@@ -181,7 +185,7 @@ The `image-cve` command supports these overrides:
 
 - `RKE2_PATCHER_CVE_SCANNER_IMAGE`
   - Scanner image used by cluster mode.
-  - Default: `aquasec/trivy:latest`
+  - Default: `aquasec/trivy:0.69.3`
 
 - `RKE2_PATCHER_CVE_JOB_TIMEOUT`
   - Timeout for waiting on scan Job completion.

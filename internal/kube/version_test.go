@@ -26,7 +26,7 @@ func TestClusterVersion(t *testing.T) {
 			name:       "returns error when status is not ok",
 			statusCode: http.StatusUnauthorized,
 			body:       `{"message":"unauthorized"}`,
-			wantErr:    "status 401",
+			wantErr:    "failed to fetch cluster version",
 		},
 		{
 			name:       "returns error when gitVersion is missing",

@@ -192,22 +192,22 @@ func runCVE(component components.Component) error {
 	// runningImages is ordered by count, so the first image is the most used one
 	image := runningImages[0].Image
 
-	result, err := cve.ListForImage(image)
+	resultCVEs, err := cve.ListCVEsForImage(image)
 	if err != nil {
 		return fmt.Errorf("failed to scan image %q: %w", image, err)
 	}
 
 	fmt.Printf("component: %s\n", component.Name)
 	fmt.Printf("image: %s\n", image)
-	fmt.Printf("scanner: %s\n", result.Tool)
+	fmt.Printf("scanner: %s\n", resultCVEs.Tool)
 
-	if len(result.CVEs) == 0 {
+	if len(resultCVEs.CVEs) == 0 {
 		fmt.Println("CVEs: none")
 		return nil
 	}
 
-	fmt.Printf("CVEs (%d):\n", len(result.CVEs))
-	for _, id := range result.CVEs {
+	fmt.Printf("CVEs (%d):\n", len(resultCVEs.CVEs))
+	for _, id := range resultCVEs.CVEs {
 		fmt.Printf("- %s\n", id)
 	}
 
@@ -242,7 +242,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 			targetImages = append(targetImages, fmt.Sprintf("%s:%s", currentImageName, tagName))
 		}
 
-		resultsByImage, errorsByImage, scanErr := cve.ListForImages(targetImages)
+		resultsByImage, errorsByImage, scanErr := cve.ListCVEsForImages(targetImages)
 		if scanErr != nil {
 			return scanErr
 		}

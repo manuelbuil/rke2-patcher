@@ -1,14 +1,17 @@
 package kube
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -18,42 +21,20 @@ const (
 	serviceAccountNamespace     = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 )
 
-type podNodeNameResponse struct {
-	Spec struct {
-		NodeName string `json:"nodeName"`
-	} `json:"spec"`
-}
-
-type nodeAnnotationsResponse struct {
-	Metadata struct {
-		Annotations map[string]string `json:"annotations"`
-	} `json:"metadata"`
-}
-
-type nodeListResponse struct {
-	Continue string `json:"continue"`
-	Items    []struct {
-		Metadata struct {
-			Name        string            `json:"name"`
-			Annotations map[string]string `json:"annotations"`
-		} `json:"metadata"`
-	} `json:"items"`
-}
-
 func DiscoverRKE2DataDirFromLocalNodeArgs() (string, error) {
-	api, err := kubeAPIClient()
+	clientset, err := kubeClientset()
 	if err != nil {
 		return "", err
 	}
 
-	nodeNames := discoverLocalNodeNameCandidates(api)
+	nodeNames := discoverLocalNodeNameCandidates(clientset)
 	if len(nodeNames) == 0 {
 		return "", nil
 	}
 
 	var failures []string
 	for _, nodeName := range nodeNames {
-		dataDir, found, findErr := dataDirFromNodeArgsAnnotation(api, nodeName)
+		dataDir, found, findErr := dataDirFromNodeArgsAnnotation(clientset, nodeName)
 		if findErr != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", nodeName, findErr))
 			continue
@@ -63,7 +44,7 @@ func DiscoverRKE2DataDirFromLocalNodeArgs() (string, error) {
 		}
 	}
 
-	fallbackDataDir, fallbackFound, fallbackErr := dataDirFromNodeAnnotationsByHostIdentity(api)
+	fallbackDataDir, fallbackFound, fallbackErr := dataDirFromNodeAnnotationsByHostIdentity(clientset)
 	if fallbackErr != nil {
 		failures = append(failures, fmt.Sprintf("annotation-identity-fallback: %v", fallbackErr))
 	} else if fallbackFound {
@@ -77,7 +58,7 @@ func DiscoverRKE2DataDirFromLocalNodeArgs() (string, error) {
 	return "", nil
 }
 
-func discoverLocalNodeNameCandidates(api kubeAPI) []string {
+func discoverLocalNodeNameCandidates(clientset kubernetes.Interface) []string {
 	unique := map[string]struct{}{}
 	result := []string{}
 
@@ -106,7 +87,7 @@ func discoverLocalNodeNameCandidates(api kubeAPI) []string {
 	if err == nil {
 		namespace := strings.TrimSpace(string(namespaceBytes))
 		if namespace != "" && strings.TrimSpace(hostname) != "" {
-			nodeName, nodeErr := nodeNameForPod(api, namespace, hostname)
+			nodeName, nodeErr := nodeNameForPod(clientset, namespace, hostname)
 			if nodeErr == nil {
 				add(nodeName)
 			}
@@ -133,83 +114,41 @@ func hostnameCandidates(hostname string) []string {
 	return result
 }
 
-func nodeNameForPod(api kubeAPI, namespace string, podName string) (string, error) {
-	requestURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s", api.BaseURL, url.PathEscape(namespace), url.PathEscape(podName))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+func nodeNameForPod(clientset kubernetes.Interface, namespace string, podName string) (string, error) {
+	pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), podName, metav1.GetOptions{})
 	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return "", nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", fmt.Errorf("failed to get pod %s/%s: status %d: %s", namespace, podName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var pod podNodeNameResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pod); err != nil {
-		return "", err
+		if k8serrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get pod %s/%s: %w", namespace, podName, err)
 	}
 
 	return strings.TrimSpace(pod.Spec.NodeName), nil
 }
 
-func dataDirFromNodeArgsAnnotation(api kubeAPI, nodeName string) (string, bool, error) {
+func dataDirFromNodeArgsAnnotation(clientset kubernetes.Interface, nodeName string) (string, bool, error) {
 	trimmedNodeName := strings.TrimSpace(nodeName)
 	if trimmedNodeName == "" {
 		return "", false, nil
 	}
 
-	requestURL := fmt.Sprintf("%s/api/v1/nodes/%s", api.BaseURL, url.PathEscape(trimmedNodeName))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	node, err := clientset.CoreV1().Nodes().Get(context.Background(), trimmedNodeName, metav1.GetOptions{})
 	if err != nil {
-		return "", false, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return "", false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return "", false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", false, fmt.Errorf("failed to get node %s: status %d: %s", trimmedNodeName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var node nodeAnnotationsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&node); err != nil {
-		return "", false, err
+		if k8serrors.IsNotFound(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("failed to get node %s: %w", trimmedNodeName, err)
 	}
 
 	rawArgs := ""
-	if node.Metadata.Annotations != nil {
-		rawArgs = strings.TrimSpace(node.Metadata.Annotations[rke2NodeArgsAnnotationKey])
+	if node.Annotations != nil {
+		rawArgs = strings.TrimSpace(node.Annotations[rke2NodeArgsAnnotationKey])
 	}
 
 	return parseDataDirFromNodeArgs(rawArgs)
 }
 
-func dataDirFromNodeAnnotationsByHostIdentity(api kubeAPI) (string, bool, error) {
+func dataDirFromNodeAnnotationsByHostIdentity(clientset kubernetes.Interface) (string, bool, error) {
 	hostname, _ := os.Hostname()
 	localHostnameCandidates := hostnameCandidates(hostname)
 	localIPs := localIPSet()
@@ -217,24 +156,24 @@ func dataDirFromNodeAnnotationsByHostIdentity(api kubeAPI) (string, bool, error)
 	dataDirs := map[string]struct{}{}
 
 	for {
-		nodes, err := listNodesPage(api, continueToken)
+		nodes, err := listNodesPage(clientset, continueToken)
 		if err != nil {
 			return "", false, err
 		}
 
 		for _, node := range nodes.Items {
-			if !annotationMatchesLocalIdentity(node.Metadata.Annotations, localHostnameCandidates, localIPs) {
+			if !annotationMatchesLocalIdentity(node.Annotations, localHostnameCandidates, localIPs) {
 				continue
 			}
 
 			rawArgs := ""
-			if node.Metadata.Annotations != nil {
-				rawArgs = strings.TrimSpace(node.Metadata.Annotations[rke2NodeArgsAnnotationKey])
+			if node.Annotations != nil {
+				rawArgs = strings.TrimSpace(node.Annotations[rke2NodeArgsAnnotationKey])
 			}
 
 			dataDir, found, err := parseDataDirFromNodeArgs(rawArgs)
 			if err != nil {
-				return "", false, fmt.Errorf("node %q: %w", strings.TrimSpace(node.Metadata.Name), err)
+				return "", false, fmt.Errorf("node %q: %w", strings.TrimSpace(node.Name), err)
 			}
 			if !found {
 				continue
@@ -268,34 +207,13 @@ func dataDirFromNodeAnnotationsByHostIdentity(api kubeAPI) (string, bool, error)
 	return "", false, nil
 }
 
-func listNodesPage(api kubeAPI, continueToken string) (nodeListResponse, error) {
-	requestURL := api.BaseURL + "/api/v1/nodes?limit=500"
-	if strings.TrimSpace(continueToken) != "" {
-		requestURL += "&continue=" + url.QueryEscape(continueToken)
-	}
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+func listNodesPage(clientset kubernetes.Interface, continueToken string) (*corev1.NodeList, error) {
+	list, err := clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{
+		Limit:    500,
+		Continue: strings.TrimSpace(continueToken),
+	})
 	if err != nil {
-		return nodeListResponse{}, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return nodeListResponse{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nodeListResponse{}, fmt.Errorf("failed to list nodes: status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var list nodeListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return nodeListResponse{}, err
+		return nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
 
 	return list, nil

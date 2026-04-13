@@ -2,16 +2,20 @@ package kube
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
 	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -23,6 +27,7 @@ const (
 	defaultCVEJobTimeout = 8 * time.Minute
 )
 
+// scanJobStatus uses an int for Succeeded and Failed to track all possible pods created by the job
 type scanJobStatus struct {
 	Succeeded  int32
 	Failed     int32
@@ -34,25 +39,6 @@ type scanJobCondition struct {
 	Status  string `json:"status"`
 	Reason  string `json:"reason"`
 	Message string `json:"message"`
-}
-
-type scanJobResponse struct {
-	Status struct {
-		Succeeded  int32              `json:"succeeded"`
-		Failed     int32              `json:"failed"`
-		Conditions []scanJobCondition `json:"conditions"`
-	} `json:"status"`
-}
-
-type scanPodList struct {
-	Items []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Status struct {
-			Phase string `json:"phase"`
-		} `json:"status"`
-	} `json:"items"`
 }
 
 const (
@@ -92,13 +78,31 @@ var trivyVEXDownloadScriptLines = []string{
 	"done",
 }
 
-func ScanImageWithTrivyJob(image string, showProgress bool) ([]byte, error) {
-	targetImage := strings.TrimSpace(image)
-	if targetImage == "" {
-		return nil, fmt.Errorf("target image cannot be empty")
+func kubeClientset() (*kubernetes.Clientset, error) {
+	api, err := kubeAPIClient()
+	if err != nil {
+		return nil, err
 	}
 
-	api, err := kubeAPIClient()
+	restConfig := &rest.Config{Host: api.BaseURL}
+	authHeader := strings.TrimSpace(api.AuthHeader)
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		restConfig.BearerToken = strings.TrimSpace(authHeader[len("Bearer "):])
+	}
+
+	clientset, err := kubernetes.NewForConfigAndClient(restConfig, api.Client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize kubernetes client: %w", err)
+	}
+
+	return clientset, nil
+}
+
+// ScanImageWithTrivyJob creates a Kubernetes Job to scan the given image with Trivy inside the cluster and waits for the job to complete, returning the logs of the job which contain the scan results.
+func ScanImageWithTrivyJob(image string) ([]byte, error) {
+	targetImage := strings.TrimSpace(image)
+
+	clientset, err := kubeClientset()
 	if err != nil {
 		return nil, err
 	}
@@ -108,13 +112,11 @@ func ScanImageWithTrivyJob(image string, showProgress bool) ([]byte, error) {
 		namespace = defaultCVENamespace
 	}
 
-	if err := ensureNamespaceForScanJob(api, namespace); err != nil {
+	if err := ensureNamespaceForScanJob(clientset, namespace); err != nil {
 		return nil, err
 	}
 
-	if showProgress {
-		fmt.Println("Checking CVEs with in-cluster scanner job. Please wait...")
-	}
+	fmt.Println("Checking CVEs with in-cluster scanner job. Please wait...")
 
 	scannerImage := strings.TrimSpace(os.Getenv(cveScannerImageEnv))
 	if scannerImage == "" {
@@ -134,14 +136,14 @@ func ScanImageWithTrivyJob(image string, showProgress bool) ([]byte, error) {
 	}
 
 	jobName := fmt.Sprintf("rke2-patcher-cve-%d", time.Now().UnixNano())
-	if err := createScanJob(api, namespace, jobName, scannerImage, targetImage); err != nil {
+	if err := createScanJob(clientset, namespace, jobName, scannerImage, targetImage); err != nil {
 		return nil, err
 	}
 	defer func() {
-		_ = deleteJob(api, namespace, jobName)
+		_ = deleteJob(clientset, namespace, jobName)
 	}()
 
-	return waitForScanJobCompletion(api, namespace, jobName, timeout)
+	return waitForScanJobCompletion(clientset, namespace, jobName, timeout)
 }
 
 func ScanImagesWithTrivyJob(images []string, showProgress bool) ([]byte, error) {
@@ -158,7 +160,7 @@ func ScanImagesWithTrivyJob(images []string, showProgress bool) ([]byte, error) 
 		return nil, fmt.Errorf("target images cannot be empty")
 	}
 
-	api, err := kubeAPIClient()
+	clientset, err := kubeClientset()
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +170,7 @@ func ScanImagesWithTrivyJob(images []string, showProgress bool) ([]byte, error) 
 		namespace = defaultCVENamespace
 	}
 
-	if err := ensureNamespaceForScanJob(api, namespace); err != nil {
+	if err := ensureNamespaceForScanJob(clientset, namespace); err != nil {
 		return nil, err
 	}
 
@@ -194,27 +196,45 @@ func ScanImagesWithTrivyJob(images []string, showProgress bool) ([]byte, error) 
 	}
 
 	jobName := fmt.Sprintf("rke2-patcher-cve-batch-%d", time.Now().UnixNano())
-	if err := createBatchScanJob(api, namespace, jobName, scannerImage, targetImages); err != nil {
+	if err := createBatchScanJob(clientset, namespace, jobName, scannerImage, targetImages); err != nil {
 		return nil, err
 	}
 	defer func() {
-		_ = deleteJob(api, namespace, jobName)
+		_ = deleteJob(clientset, namespace, jobName)
 	}()
 
-	return waitForScanJobCompletion(api, namespace, jobName, timeout)
+	return waitForScanJobCompletion(clientset, namespace, jobName, timeout)
 }
 
-func waitForScanJobCompletion(api kubeAPI, namespace string, jobName string, timeout time.Duration) ([]byte, error) {
+// waitForScanJobCompletion waits for the scan job to complete by polling its status and returns the logs of the job once it is completed (either successfully or with failure).
+// If the job fails or if there is an error while waiting, it returns an error with details and partial logs if available.
+func waitForScanJobCompletion(clientset kubernetes.Interface, namespace string, jobName string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	deadline := time.Now().Add(timeout)
 	for {
-		status, statusErr := getScanJobStatus(api, namespace, jobName)
+		status, statusErr := getScanJobStatus(ctx, clientset, namespace, jobName)
 		if statusErr != nil {
+			// let's collect the logs, otherwise it is complicated to know what happened
+			if ctx.Err() != nil {
+				logsCtx, logsCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				logs, _ := waitForJobLogs(logsCtx, clientset, namespace, jobName)
+				logsCancel()
+
+				trimmedLogs := strings.TrimSpace(string(logs))
+				if trimmedLogs == "" {
+					return nil, fmt.Errorf("scan job %s timed out after %s", jobName, timeout)
+				}
+				return nil, fmt.Errorf("scan job %s timed out after %s; partial logs:\n%s", jobName, timeout, trimmedLogs)
+			}
 			return nil, statusErr
 		}
 
 		if status.Succeeded > 0 {
-			logs, logsErr := waitForJobLogs(api, namespace, jobName, 20*time.Second)
+			logsCtx, logsCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			// logs will show the CVEs. We don't need to digest them as when errors happen
+			logs, logsErr := waitForJobLogs(logsCtx, clientset, namespace, jobName)
+			logsCancel()
 			if logsErr != nil {
 				return nil, fmt.Errorf("scan job %s succeeded but logs are unavailable: %w", jobName, logsErr)
 			}
@@ -222,7 +242,9 @@ func waitForScanJobCompletion(api kubeAPI, namespace string, jobName string, tim
 		}
 
 		if status.Failed > 0 {
-			logs, logsErr := waitForJobLogs(api, namespace, jobName, 8*time.Second)
+			logsCtx, logsCancel := context.WithTimeout(context.Background(), 8*time.Second)
+			logs, logsErr := waitForJobLogs(logsCtx, clientset, namespace, jobName)
+			logsCancel()
 			if logsErr != nil {
 				return nil, fmt.Errorf("scan job %s failed: %s", jobName, status.failureReason())
 			}
@@ -233,19 +255,23 @@ func waitForScanJobCompletion(api kubeAPI, namespace string, jobName string, tim
 			return nil, fmt.Errorf("scan job %s failed: %s\n%s", jobName, status.failureReason(), trimmedLogs)
 		}
 
-		if time.Now().After(deadline) {
-			logs, _ := waitForJobLogs(api, namespace, jobName, 3*time.Second)
+		select {
+		case <-ctx.Done():
+			logsCtx, logsCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			logs, _ := waitForJobLogs(logsCtx, clientset, namespace, jobName)
+			logsCancel()
+
 			trimmedLogs := strings.TrimSpace(string(logs))
 			if trimmedLogs == "" {
 				return nil, fmt.Errorf("scan job %s timed out after %s", jobName, timeout)
 			}
 			return nil, fmt.Errorf("scan job %s timed out after %s; partial logs:\n%s", jobName, timeout, trimmedLogs)
+		case <-time.After(2 * time.Second):
 		}
-
-		time.Sleep(2 * time.Second)
 	}
 }
 
+// failureReason inspects the conditions of the job status to find a human-readable reason for failure, if available.
 func (s scanJobStatus) failureReason() string {
 	for _, condition := range s.Conditions {
 		if condition.Type == "Failed" && strings.EqualFold(condition.Status, "True") {
@@ -260,42 +286,42 @@ func (s scanJobStatus) failureReason() string {
 	return "job reported failed status"
 }
 
-func createScanJob(api kubeAPI, namespace string, jobName string, scannerImage string, targetImage string) error {
-	requestURL := fmt.Sprintf("%s/apis/batch/v1/namespaces/%s/jobs", api.BaseURL, url.PathEscape(namespace))
-
+// createScanJob crafts a job Manifest and calls kube-api to create the job in the cluster
+// The job downloads the VEX file and executes trivy to scan
+func createScanJob(clientset kubernetes.Interface, namespace string, jobName string, scannerImage string, targetImage string) error {
+	// It first adds the script to download the VEX file
 	scriptLines := append([]string{}, trivyVEXDownloadScriptLines...)
 	scriptLines = append(scriptLines, fmt.Sprintf("trivy image --quiet --format json --severity CRITICAL,HIGH --vex %q %q", clusterVEXFilePath, targetImage))
 	script := strings.Join(scriptLines, "\n")
+	backoffLimit := int32(0)
 
-	body := map[string]any{
-		"apiVersion": "batch/v1",
-		"kind":       "Job",
-		"metadata": map[string]any{
-			"name":      jobName,
-			"namespace": namespace,
-			"labels": map[string]string{
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespace,
+			Labels: map[string]string{
 				"app.kubernetes.io/name": "rke2-patcher",
 				"rke2-patcher.cve":       "true",
 			},
 		},
-		"spec": map[string]any{
-			"backoffLimit": int32(0),
-			"template": map[string]any{
-				"metadata": map[string]any{
-					"labels": map[string]string{
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
 						"app.kubernetes.io/name": "rke2-patcher",
 						"rke2-patcher.cve":       "true",
 					},
 				},
-				"spec": map[string]any{
-					"restartPolicy": "Never",
-					"containers": []map[string]any{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
 						{
-							"name":            "scanner",
-							"image":           scannerImage,
-							"imagePullPolicy": "IfNotPresent",
-							"command":         []string{"sh"},
-							"args":            []string{"-c", script},
+							Name:            "scanner",
+							Image:           scannerImage,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"sh"},
+							Args:            []string{"-c", script},
 						},
 					},
 				},
@@ -303,37 +329,14 @@ func createScanJob(api kubeAPI, namespace string, jobName string, scannerImage s
 		},
 	}
 
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("failed to create scan job %s/%s: status %d: %s", namespace, jobName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	if _, err := clientset.BatchV1().Jobs(namespace).Create(context.Background(), job, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("failed to create scan job %s/%s: %w", namespace, jobName, err)
 	}
 
 	return nil
 }
 
-func createBatchScanJob(api kubeAPI, namespace string, jobName string, scannerImage string, targetImages []string) error {
-	requestURL := fmt.Sprintf("%s/apis/batch/v1/namespaces/%s/jobs", api.BaseURL, url.PathEscape(namespace))
-
+func createBatchScanJob(clientset kubernetes.Interface, namespace string, jobName string, scannerImage string, targetImages []string) error {
 	scriptLines := append([]string{}, trivyVEXDownloadScriptLines...)
 	scriptLines = append(scriptLines, []string{
 		"for image in \"$@\"; do",
@@ -348,36 +351,35 @@ func createBatchScanJob(api kubeAPI, namespace string, jobName string, scannerIm
 
 	containerArgs := []string{"-c", script, "--"}
 	containerArgs = append(containerArgs, targetImages...)
+	backoffLimit := int32(0)
 
-	body := map[string]any{
-		"apiVersion": "batch/v1",
-		"kind":       "Job",
-		"metadata": map[string]any{
-			"name":      jobName,
-			"namespace": namespace,
-			"labels": map[string]string{
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespace,
+			Labels: map[string]string{
 				"app.kubernetes.io/name": "rke2-patcher",
 				"rke2-patcher.cve":       "true",
 			},
 		},
-		"spec": map[string]any{
-			"backoffLimit": int32(0),
-			"template": map[string]any{
-				"metadata": map[string]any{
-					"labels": map[string]string{
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
 						"app.kubernetes.io/name": "rke2-patcher",
 						"rke2-patcher.cve":       "true",
 					},
 				},
-				"spec": map[string]any{
-					"restartPolicy": "Never",
-					"containers": []map[string]any{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
 						{
-							"name":            "scanner",
-							"image":           scannerImage,
-							"imagePullPolicy": "IfNotPresent",
-							"command":         []string{"sh"},
-							"args":            containerArgs,
+							Name:            "scanner",
+							Image:           scannerImage,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"sh"},
+							Args:            containerArgs,
 						},
 					},
 				},
@@ -385,36 +387,16 @@ func createBatchScanJob(api kubeAPI, namespace string, jobName string, scannerIm
 		},
 	}
 
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("failed to create batch scan job %s/%s: status %d: %s", namespace, jobName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	if _, err := clientset.BatchV1().Jobs(namespace).Create(context.Background(), job, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("failed to create batch scan job %s/%s: %w", namespace, jobName, err)
 	}
 
 	return nil
 }
 
-func ensureNamespaceForScanJob(api kubeAPI, namespace string) error {
-	exists, err := namespaceExists(api, namespace)
+// ensureNamespaceForScanJob checks if the given namespace exists and prompts the user to create it if it does not exist.
+func ensureNamespaceForScanJob(clientset kubernetes.Interface, namespace string) error {
+	exists, err := namespaceExists(clientset, namespace)
 	if err != nil {
 		return err
 	}
@@ -431,7 +413,7 @@ func ensureNamespaceForScanJob(api kubeAPI, namespace string) error {
 		return fmt.Errorf("namespace %q not found and creation was not approved", namespace)
 	}
 
-	if err := createNamespace(api, namespace); err != nil {
+	if err := createNamespace(clientset, namespace); err != nil {
 		return err
 	}
 
@@ -439,72 +421,32 @@ func ensureNamespaceForScanJob(api kubeAPI, namespace string) error {
 	return nil
 }
 
-func namespaceExists(api kubeAPI, namespace string) (bool, error) {
-	requestURL := fmt.Sprintf("%s/api/v1/namespaces/%s", api.BaseURL, url.PathEscape(namespace))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	if err != nil {
-		return false, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
+// namespaceExists queries kube-api to check if the given namespace exists in the cluster
+func namespaceExists(clientset kubernetes.Interface, namespace string) (bool, error) {
+	_, err := clientset.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{})
+	if err == nil {
 		return true, nil
 	}
-	if resp.StatusCode == http.StatusNotFound {
+	if k8serrors.IsNotFound(err) {
 		return false, nil
 	}
-
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	return false, fmt.Errorf("failed to check namespace %q: status %d: %s", namespace, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	return false, fmt.Errorf("failed to check namespace %q: %w", namespace, err)
 }
 
-func createNamespace(api kubeAPI, namespace string) error {
-	requestURL := fmt.Sprintf("%s/api/v1/namespaces", api.BaseURL)
-	body := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Namespace",
-		"metadata": map[string]string{
-			"name": namespace,
-		},
-	}
-
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusConflict {
+// createNamespace creates a namespace with the given name by calling kube-api
+func createNamespace(clientset kubernetes.Interface, namespace string) error {
+	_, err := clientset.CoreV1().Namespaces().Create(
+		context.Background(),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}},
+		metav1.CreateOptions{},
+	)
+	if err == nil || k8serrors.IsAlreadyExists(err) {
 		return nil
 	}
-
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	return fmt.Errorf("failed to create namespace %q: status %d: %s", namespace, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	return fmt.Errorf("failed to create namespace %q: %w", namespace, err)
 }
 
+// promptYesNo prompts the user to answer yes or no in the terminal
 func promptYesNo() (bool, error) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
@@ -525,158 +467,105 @@ func promptYesNo() (bool, error) {
 	}
 }
 
-func getScanJobStatus(api kubeAPI, namespace string, jobName string) (scanJobStatus, error) {
-	requestURL := fmt.Sprintf("%s/apis/batch/v1/namespaces/%s/jobs/%s", api.BaseURL, url.PathEscape(namespace), url.PathEscape(jobName))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+// getScanJobStatus calls kube-api to get the status of the scan job
+func getScanJobStatus(ctx context.Context, clientset kubernetes.Interface, namespace string, jobName string) (scanJobStatus, error) {
+	job, err := clientset.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
 	if err != nil {
-		return scanJobStatus{}, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
+		return scanJobStatus{}, fmt.Errorf("failed to fetch scan job %s/%s: %w", namespace, jobName, err)
 	}
 
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return scanJobStatus{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return scanJobStatus{}, fmt.Errorf("failed to fetch scan job %s/%s: status %d: %s", namespace, jobName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var response scanJobResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return scanJobStatus{}, err
+	conditions := make([]scanJobCondition, 0, len(job.Status.Conditions))
+	for _, condition := range job.Status.Conditions {
+		conditions = append(conditions, scanJobCondition{
+			Type:    string(condition.Type),
+			Status:  string(condition.Status),
+			Reason:  condition.Reason,
+			Message: condition.Message,
+		})
 	}
 
 	return scanJobStatus{
-		Succeeded:  response.Status.Succeeded,
-		Failed:     response.Status.Failed,
-		Conditions: response.Status.Conditions,
+		Succeeded:  job.Status.Succeeded,
+		Failed:     job.Status.Failed,
+		Conditions: conditions,
 	}, nil
 }
 
-func waitForJobLogs(api kubeAPI, namespace string, jobName string, timeout time.Duration) ([]byte, error) {
-	deadline := time.Now().Add(timeout)
+// waitForJobLogs waits for the logs of the job's pod to be available and returns them.
+func waitForJobLogs(ctx context.Context, clientset kubernetes.Interface, namespace string, jobName string) ([]byte, error) {
 	var lastErr error
 
 	for {
-		podName, findErr := findJobPodName(api, namespace, jobName)
+		podName, findErr := findJobPodName(ctx, clientset, namespace, jobName)
 		if findErr != nil {
 			lastErr = findErr
 		} else if podName != "" {
-			logs, logsErr := podLogs(api, namespace, podName)
+			logs, logsErr := podLogs(ctx, clientset, namespace, podName)
 			if logsErr == nil {
 				return logs, nil
 			}
 			lastErr = logsErr
 		}
 
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
 			if lastErr == nil {
 				return nil, fmt.Errorf("timed out waiting for logs of job %s/%s", namespace, jobName)
 			}
 			return nil, lastErr
+		case <-time.After(time.Second):
 		}
-
-		time.Sleep(time.Second)
 	}
 }
 
-func findJobPodName(api kubeAPI, namespace string, jobName string) (string, error) {
-	requestURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods?labelSelector=%s", api.BaseURL, url.PathEscape(namespace), url.QueryEscape("job-name="+jobName))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+// findJobPodName calls kube-api to find the name of the pod created by the job (for retriving logs)
+func findJobPodName(ctx context.Context, clientset kubernetes.Interface, namespace string, jobName string) (string, error) {
+	list, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + jobName})
 	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("failed to list pods for job %s/%s: status %d: %s", namespace, jobName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var list scanPodList
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to list pods for job %s/%s: %w", namespace, jobName, err)
 	}
 
 	if len(list.Items) == 0 {
 		return "", nil
 	}
 
+	// sorting for deterministic behavior, otherwise we might get different pods across different attempts
 	sort.Slice(list.Items, func(i int, j int) bool {
-		return list.Items[i].Metadata.Name < list.Items[j].Metadata.Name
+		return list.Items[i].Name < list.Items[j].Name
 	})
 
 	for _, item := range list.Items {
-		phase := strings.TrimSpace(item.Status.Phase)
+		phase := strings.TrimSpace(string(item.Status.Phase))
 		if phase == "Succeeded" || phase == "Failed" || phase == "Running" {
-			return item.Metadata.Name, nil
+			return item.Name, nil
 		}
 	}
 
-	return list.Items[0].Metadata.Name, nil
+	return "", nil
 }
 
-func podLogs(api kubeAPI, namespace string, podName string) ([]byte, error) {
-	requestURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s/log?container=scanner", api.BaseURL, url.PathEscape(namespace), url.PathEscape(podName))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+// podLogs calls kube-api to get the logs of the given pod
+func podLogs(ctx context.Context, clientset kubernetes.Interface, namespace string, podName string) ([]byte, error) {
+	stream, err := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: "scanner"}).Stream(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read logs for pod %s/%s: %w", namespace, podName, err)
 	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
+	defer stream.Close()
 
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("failed to read logs for pod %s/%s: status %d: %s", namespace, podName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(stream)
 }
 
-func deleteJob(api kubeAPI, namespace string, jobName string) error {
-	requestURL := fmt.Sprintf("%s/apis/batch/v1/namespaces/%s/jobs/%s?propagationPolicy=Background", api.BaseURL, url.PathEscape(namespace), url.PathEscape(jobName))
-
-	req, err := http.NewRequest(http.MethodDelete, requestURL, nil)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
+// deleteJob calls kube-api to delete the given job
+func deleteJob(clientset kubernetes.Interface, namespace string, jobName string) error {
+	policy := metav1.DeletePropagationBackground
+	err := clientset.BatchV1().Jobs(namespace).Delete(
+		context.Background(),
+		jobName,
+		metav1.DeleteOptions{PropagationPolicy: &policy},
+	)
+	if err == nil || k8serrors.IsNotFound(err) {
 		return nil
 	}
 
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	return fmt.Errorf("failed to delete scan job %s/%s: status %d: %s", namespace, jobName, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	return fmt.Errorf("failed to delete scan job %s/%s: %w", namespace, jobName, err)
 }

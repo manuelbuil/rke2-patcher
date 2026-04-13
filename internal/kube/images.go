@@ -1,15 +1,16 @@
 package kube
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 type PodImageSummary struct {
@@ -17,34 +18,9 @@ type PodImageSummary struct {
 	Count int
 }
 
-type podList struct {
-	Continue string `json:"continue"`
-	Items    []struct {
-		Status struct {
-			Phase string `json:"phase"`
-		} `json:"status"`
-		Spec struct {
-			InitContainers []struct {
-				Image string `json:"image"`
-			} `json:"initContainers"`
-			Containers []struct {
-				Image string `json:"image"`
-			} `json:"containers"`
-		} `json:"spec"`
-	} `json:"items"`
-}
-
-type workloadGetResponse struct {
-	Spec struct {
-		Selector struct {
-			MatchLabels map[string]string `json:"matchLabels"`
-		} `json:"selector"`
-	} `json:"spec"`
-}
-
 // ListRunningImages lists the images used by the running pods of a component (e.g. different versions during an upgrade)
 func ListRunningImages(componentWorkload components.WorkloadRef, componentRepository string) ([]PodImageSummary, error) {
-	api, err := kubeAPIClient()
+	clientset, err := kubeClientset()
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +28,7 @@ func ListRunningImages(componentWorkload components.WorkloadRef, componentReposi
 	// Counts the number of occurences of each image (e.g. different versions)
 	counts := make(map[string]int)
 
-	selector, selectorErr := workloadSelector(api, componentWorkload.Kind, componentWorkload.Namespace, componentWorkload.Name)
+	selector, selectorErr := workloadSelector(clientset, componentWorkload.Kind, componentWorkload.Namespace, componentWorkload.Name)
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
@@ -60,13 +36,13 @@ func ListRunningImages(componentWorkload components.WorkloadRef, componentReposi
 	// In case there are more than 500 pods in the cluster we paginate results with continueToken
 	continueToken := ""
 	for {
-		list, listErr := listPods(api, componentWorkload.Namespace, selector, continueToken)
+		list, listErr := listPods(clientset, componentWorkload.Namespace, selector, continueToken)
 		if listErr != nil {
 			return nil, listErr
 		}
 
 		for _, item := range list.Items {
-			if item.Status.Phase != "Running" {
+			if item.Status.Phase != corev1.PodRunning {
 				continue
 			}
 
@@ -112,101 +88,72 @@ func ListRunningImages(componentWorkload components.WorkloadRef, componentReposi
 }
 
 // listPods calls kube-api to list pods in the given namespace with the given label selector
-func listPods(api kubeAPI, namespace string, selector string, continueToken string) (podList, error) {
-	requestURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods?limit=500", api.BaseURL, url.PathEscape(namespace))
-	requestURL += "&labelSelector=" + url.QueryEscape(selector)
-	if strings.TrimSpace(continueToken) != "" {
-		requestURL += "&continue=" + url.QueryEscape(continueToken)
-	}
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+func listPods(clientset kubernetes.Interface, namespace string, selector string, continueToken string) (*corev1.PodList, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		Limit:         500,
+		LabelSelector: selector,
+		Continue:      strings.TrimSpace(continueToken),
+	})
 	if err != nil {
-		return podList{}, err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
+		return nil, fmt.Errorf("failed to list pods in namespace %q: %w", namespace, err)
 	}
 
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return podList{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return podList{}, fmt.Errorf("kube api returned status %d while listing pods in namespace %q: %s", resp.StatusCode, namespace, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var list podList
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return podList{}, err
-	}
-
-	return list, nil
+	return pods, nil
 }
 
 // workloadSelector calls kube-api to get the selector of a workload. That selector is used to find the
 // pods of the workload and their images (normally a label)
-func workloadSelector(api kubeAPI, kind string, namespace string, name string) (string, error) {
-	resource := ""
+func workloadSelector(clientset kubernetes.Interface, kind string, namespace string, name string) (string, error) {
+	matchLabels := map[string]string{}
+
 	switch kind {
 	case "daemonset":
-		resource = "daemonsets"
+		daemonSet, daemonSetErr := clientset.AppsV1().DaemonSets(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		if daemonSetErr != nil {
+			if k8serrors.IsNotFound(daemonSetErr) {
+				return "", fmt.Errorf("workload %s/%s/%s not found", kind, namespace, name)
+			}
+			return "", fmt.Errorf("failed to fetch workload %s/%s/%s: %w", kind, namespace, name, daemonSetErr)
+		}
+
+		if daemonSet.Spec.Selector != nil {
+			matchLabels = daemonSet.Spec.Selector.MatchLabels
+		}
 	case "deployment":
-		resource = "deployments"
+		deployment, deploymentErr := clientset.AppsV1().Deployments(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		if deploymentErr != nil {
+			if k8serrors.IsNotFound(deploymentErr) {
+				return "", fmt.Errorf("workload %s/%s/%s not found", kind, namespace, name)
+			}
+			return "", fmt.Errorf("failed to fetch workload %s/%s/%s: %w", kind, namespace, name, deploymentErr)
+		}
+
+		if deployment.Spec.Selector != nil {
+			matchLabels = deployment.Spec.Selector.MatchLabels
+		}
 	default:
 		return "", fmt.Errorf("unsupported workload kind %q", kind)
 	}
 
-	requestURL := fmt.Sprintf("%s/apis/apps/v1/namespaces/%s/%s/%s", api.BaseURL, url.PathEscape(namespace), resource, url.PathEscape(name))
-
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(api.AuthHeader) != "" {
-		req.Header.Set("Authorization", api.AuthHeader)
-	}
-
-	resp, err := api.Client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("workload %s/%s/%s not found", kind, namespace, name)
-	}
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", fmt.Errorf("failed to fetch workload %s/%s/%s: status %d: %s", kind, namespace, name, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var workload workloadGetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&workload); err != nil {
-		return "", err
-	}
-
-	if len(workload.Spec.Selector.MatchLabels) == 0 {
+	if len(matchLabels) == 0 {
 		return "", fmt.Errorf("workload %s/%s/%s has empty selector.matchLabels", kind, namespace, name)
 	}
 
-	keys := make([]string, 0, len(workload.Spec.Selector.MatchLabels))
-	for key := range workload.Spec.Selector.MatchLabels {
+	keys := make([]string, 0, len(matchLabels))
+	for key := range matchLabels {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
 	selectorParts := make([]string, 0, len(keys))
 	for _, key := range keys {
-		selectorParts = append(selectorParts, fmt.Sprintf("%s=%s", key, workload.Spec.Selector.MatchLabels[key]))
+		selectorParts = append(selectorParts, fmt.Sprintf("%s=%s", key, matchLabels[key]))
 	}
 
 	return strings.Join(selectorParts, ","), nil
 }
 
-// imageBelongsToRepository checks if the given image belongs to the given repository of the component. 
+// imageBelongsToRepository checks if the given image belongs to the given repository of the component.
 func imageBelongsToRepository(image string, componentRepository string) bool {
 	imageRepository := imageNameWithoutTagOrDigest(image)
 	if imageRepository == componentRepository {
@@ -216,8 +163,8 @@ func imageBelongsToRepository(image string, componentRepository string) bool {
 	return strings.HasSuffix(imageRepository, "/"+componentRepository)
 }
 
-// imageNameWithoutTagOrDigest returns the image name without the tag or digest, if present. 
-// For example, "rancher/hardened-flannel:v0.1.0" and "rancher/hardened-flannel@sha256:abc123" would 
+// imageNameWithoutTagOrDigest returns the image name without the tag or digest, if present.
+// For example, "rancher/hardened-flannel:v0.1.0" and "rancher/hardened-flannel@sha256:abc123" would
 // both return "rancher/hardened-flannel"
 func imageNameWithoutTagOrDigest(image string) string {
 	trimmed := strings.TrimSpace(image)

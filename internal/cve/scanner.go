@@ -31,7 +31,7 @@ const (
 	vexMaxFileAge        = 24 * time.Hour
 )
 
-type Result struct {
+type ResultCVEs struct {
 	Tool string
 	CVEs []string
 }
@@ -39,28 +39,29 @@ type Result struct {
 // Indirection created to allow test mocking
 var (
 	scanImagesWithTrivyJob = kube.ScanImagesWithTrivyJob
-	listForImageLocal      = scanImageLocally
+	listCVEsForImageLocal  = scanImageLocally
 )
 
-func ListForImage(image string) (Result, error) {
+// ListCVEsForImage scans the given image for CVEs using the appropriate scanning mode (local or cluster) and returns the CVEs found
+func ListCVEsForImage(image string) (ResultCVEs, error) {
 	mode, err := resolveScanMode()
 	if err != nil {
-		return Result{}, err
+		return ResultCVEs{}, err
 	}
 
 	if mode == "local" {
-		return listForImageLocal(image)
+		return listCVEsForImageLocal(image)
 	}
 
-	output, scanErr := kube.ScanImageWithTrivyJob(image, true)
+	output, scanErr := kube.ScanImageWithTrivyJob(image)
 	if scanErr == nil {
 		cves, parseErr := trivyCVEsFromJSON(output)
 		if parseErr == nil {
-			return Result{Tool: "trivy-job", CVEs: cves}, nil
+			return ResultCVEs{Tool: "trivy-job", CVEs: cves}, nil
 		}
 		scanErr = parseErr
 	}
-	return Result{}, fmt.Errorf("cluster scanner failed: %v", scanErr)
+	return ResultCVEs{}, fmt.Errorf("cluster scanner failed: %v", scanErr)
 }
 
 // ResolveScanMode resolves what scan mode we use
@@ -68,7 +69,7 @@ func ResolveScanMode() (string, error) {
 	return resolveScanMode()
 }
 
-func ListForImages(images []string) (map[string]Result, map[string]error, error) {
+func ListCVEsForImages(images []string) (map[string]ResultCVEs, map[string]error, error) {
 	mode, err := resolveScanMode()
 	if err != nil {
 		return nil, nil, err
@@ -84,15 +85,15 @@ func ListForImages(images []string) (map[string]Result, map[string]error, error)
 	}
 
 	if len(targetImages) == 0 {
-		return map[string]Result{}, map[string]error{}, nil
+		return map[string]ResultCVEs{}, map[string]error{}, nil
 	}
 
 	if mode == "local" {
-		results := make(map[string]Result)
+		results := make(map[string]ResultCVEs)
 		errorsByImage := make(map[string]error)
 
 		for _, image := range targetImages {
-			result, scanErr := listForImageLocal(image)
+			result, scanErr := listCVEsForImageLocal(image)
 			if scanErr != nil {
 				errorsByImage[image] = scanErr
 				continue
@@ -107,7 +108,7 @@ func ListForImages(images []string) (map[string]Result, map[string]error, error)
 	return listForImagesInCluster(targetImages)
 }
 
-func ListForImagesInCluster(images []string) (map[string]Result, map[string]error, error) {
+func ListForImagesInCluster(images []string) (map[string]ResultCVEs, map[string]error, error) {
 	targetImages := make([]string, 0, len(images))
 	for _, image := range images {
 		trimmed := strings.TrimSpace(image)
@@ -118,19 +119,19 @@ func ListForImagesInCluster(images []string) (map[string]Result, map[string]erro
 	}
 
 	if len(targetImages) == 0 {
-		return map[string]Result{}, map[string]error{}, nil
+		return map[string]ResultCVEs{}, map[string]error{}, nil
 	}
 
 	return listForImagesInCluster(targetImages)
 }
 
-func listForImagesInCluster(targetImages []string) (map[string]Result, map[string]error, error) {
+func listForImagesInCluster(targetImages []string) (map[string]ResultCVEs, map[string]error, error) {
 	output, err := scanImagesWithTrivyJob(targetImages, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cluster scanner failed: %w", err)
 	}
 
-	results := make(map[string]Result)
+	results := make(map[string]ResultCVEs)
 	errorsByImage := make(map[string]error)
 	chunksByImage := make(map[string][]string)
 	rcByImage := make(map[string]int)
@@ -198,40 +199,44 @@ func listForImagesInCluster(targetImages []string) (map[string]Result, map[strin
 			continue
 		}
 
-		results[image] = Result{Tool: "trivy-job-batch", CVEs: cves}
+		results[image] = ResultCVEs{Tool: "trivy-job-batch", CVEs: cves}
 	}
 
 	return results, errorsByImage, nil
 }
 
-func scanImageLocally(image string) (Result, error) {
+// scanImageLocally scans the given image with a local scanner and returns the CVEs found
+func scanImageLocally(image string) (ResultCVEs, error) {
 	errorsByMode := make([]string, 0)
 
 	if _, lookErr := exec.LookPath("trivy"); lookErr == nil {
 		cves, scanErr := trivyCVEs(image)
 		if scanErr == nil {
-			return Result{Tool: "trivy", CVEs: cves}, nil
+			return ResultCVEs{Tool: "trivy", CVEs: cves}, nil
 		}
 		errorsByMode = append(errorsByMode, fmt.Sprintf("local trivy failed: %v", scanErr))
 	}
 
+	//grype is only used as fallback
+	//TODO: Allow user to select grype too
 	if _, lookErr := exec.LookPath("grype"); lookErr == nil {
 		cves, scanErr := grypeCVEs(image)
 		if scanErr == nil {
-			return Result{Tool: "grype", CVEs: cves}, nil
+			return ResultCVEs{Tool: "grype", CVEs: cves}, nil
 		}
 		errorsByMode = append(errorsByMode, fmt.Sprintf("local grype failed: %v", scanErr))
 	}
 
 	if len(errorsByMode) == 0 {
-		return Result{}, fmt.Errorf("no local scanner available: install trivy or grype")
+		return ResultCVEs{}, fmt.Errorf("no local scanner available: install trivy or grype")
 	}
 
-	return Result{}, fmt.Errorf("%s", strings.Join(errorsByMode, "; "))
+	return ResultCVEs{}, fmt.Errorf("%s", strings.Join(errorsByMode, "; "))
 }
 
+// trivyCVEs scans the given image with local trivy and returns the list of CVEs found
 func trivyCVEs(image string) ([]string, error) {
-	vexFilePath, err := ensureLocalTrivyVEXFile()
+	vexFilePath, err := ensureLocalVEXFile()
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +250,7 @@ func trivyCVEs(image string) ([]string, error) {
 	return trivyCVEsFromJSON(output)
 }
 
+// trivyCVEsFromJSON parses the JSON output of trivy and extracts the list of CVE IDs
 func trivyCVEsFromJSON(output []byte) ([]string, error) {
 
 	var report struct {
@@ -268,10 +274,13 @@ func trivyCVEsFromJSON(output []byte) ([]string, error) {
 	}), nil
 }
 
-func ensureLocalTrivyVEXFile() (string, error) {
+// ensureLocalVEXFile checks if a local VEX file is available and not very old (24h), and if not,
+// attempts to download it from the hardcoded URL. It returns the path to the VEX file that can be used
+// for local scans.
+func ensureLocalVEXFile() (string, error) {
 	homeDirectory, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve user home directory for trivy vex configuration: %w", err)
+		return "", fmt.Errorf("failed to resolve user home directory for local VEX configuration: %w", err)
 	}
 
 	vexDirectory := filepath.Join(homeDirectory, "rke2-patcher-cache", "vex")
@@ -315,7 +324,7 @@ func ensureLocalTrivyVEXFile() (string, error) {
 		return vexFilePath, nil
 	}
 
-	return "", fmt.Errorf("failed to download vex report from %q after %d attempts and no local VEX file is available; local Trivy scan requires the VEX file: %w", vexReportURL, vexDownloadAttempts, lastErr)
+	return "", fmt.Errorf("failed to download vex report from %q after %d attempts and no local VEX file is available; local scan requires the VEX file: %w", vexReportURL, vexDownloadAttempts, lastErr)
 }
 
 // downloadVEXFileOnce downloads the VEX file from the hardcoded URL and saves it to the given path
@@ -372,7 +381,12 @@ func resolveScanMode() (string, error) {
 }
 
 func grypeCVEs(image string) ([]string, error) {
-	cmd := exec.Command("grype", image, "-o", "json")
+	vexFilePath, err := ensureLocalVEXFile()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command("grype", image, "-o", "json", "--vex", vexFilePath)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -381,7 +395,8 @@ func grypeCVEs(image string) ([]string, error) {
 	var report struct {
 		Matches []struct {
 			Vulnerability struct {
-				ID string `json:"id"`
+				ID       string `json:"id"`
+				Severity string `json:"severity"`
 			} `json:"vulnerability"`
 		} `json:"matches"`
 	}
@@ -392,11 +407,16 @@ func grypeCVEs(image string) ([]string, error) {
 
 	return dedupeCVEs(func(appendCVE func(string)) {
 		for _, match := range report.Matches {
+			severity := strings.ToUpper(strings.TrimSpace(match.Vulnerability.Severity))
+			if severity != "CRITICAL" && severity != "HIGH" {
+				continue
+			}
 			appendCVE(match.Vulnerability.ID)
 		}
 	}), nil
 }
 
+// dedupeCVEs collects CVE IDs from the function and returns a deduplicated, sorted list of CVE IDs
 func dedupeCVEs(visitor func(func(string))) []string {
 	set := make(map[string]struct{})
 	visitor(func(value string) {
