@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
 	cli "github.com/urfave/cli/v2"
 )
 
@@ -16,8 +16,6 @@ const (
 	registryEnvName         = "RKE2_PATCHER_REGISTRY"
 	dataDirEnvName          = "RKE2_PATCHER_DATA_DIR"
 	defaultRegistryHost     = "registry.rancher.com"
-	helmNamespaceEnvName    = "RKE2_PATCHER_HELM_NAMESPACE"
-	defaultHelmNamespace    = "kube-system"
 	cveModeEnvName          = "RKE2_PATCHER_CVE_MODE"
 	defaultCVEMode          = "cluster"
 	cveNamespaceEnvName     = "RKE2_PATCHER_CVE_NAMESPACE"
@@ -71,7 +69,6 @@ func collectConfigEntries() ([]configEntry, error) {
 	}
 
 	dataDir, dataDirSource := envOr(dataDirEnvName, defaultRKE2DataDir)
-	helmNamespace, helmNamespaceSource := envOr(helmNamespaceEnvName, defaultHelmNamespace)
 	cveNamespace, cveNamespaceSource := envOr(cveNamespaceEnvName, defaultCVENamespaceName)
 	cveScannerImage, cveScannerImageSource := envOr(cveScannerImageEnvName, defaultCVEScannerImage)
 
@@ -83,10 +80,7 @@ func collectConfigEntries() ([]configEntry, error) {
 		{Key: "cve_job_timeout", Effective: jobTimeout.String(), Default: defaultCVEJobTimeout.String(), Source: timeoutSource},
 		{Key: "data_dir", Effective: dataDir, Default: defaultRKE2DataDir, Source: dataDirSource},
 		{Key: "manifests_dir", Effective: filepath.Join(dataDir, "server", "manifests"), Default: filepath.Join(defaultRKE2DataDir, "server", "manifests"), Source: dataDirSource},
-		{Key: "rke2_patcher_state_namespace", Effective: cveNamespace, Default: defaultCVENamespaceName, Source: cveNamespaceSource},
 		{Key: "rke2_patcher_state_configmap", Effective: kube.StateConfigMapName, Default: kube.StateConfigMapName, Source: "default"},
-		{Key: "rke2_patcher_state_key", Effective: kube.StateConfigMapDataKey, Default: kube.StateConfigMapDataKey, Source: "default"},
-		{Key: "helm_namespace", Effective: helmNamespace, Default: defaultHelmNamespace, Source: helmNamespaceSource},
 	}
 
 	return entries, nil

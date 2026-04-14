@@ -18,11 +18,11 @@ make build
 
 ```bash
 rke2-patcher --version
-rke2-patcher config
+rke2-patcher --config
 rke2-patcher image-cve <component>
 rke2-patcher image-list <component> [--with-cves] [--verbose]
 rke2-patcher image-patch <component> [--dry-run]
-rke2-patcher reconcile <component>
+rke2-patcher image-reconcile <component>
 ```
 
 - `--version` always prints the CLI version and also tries to print the connected cluster version (`gitVersion`) from Kubernetes API `/version`.
@@ -40,7 +40,7 @@ make image-patch COMPONENT=rke2-traefik
 ### 0) Show effective configuration
 
 ```bash
-rke2-patcher config
+rke2-patcher --config
 ```
 
 - Prints effective/default/source for relevant runtime config values.
@@ -103,7 +103,7 @@ rke2-patcher image-patch rke2-traefik --dry-run
 - Refuses to patch when current tag is already the newest available tag.
 - Refuses to patch when the target tag would move to a newer minor release.
 - Refuses to patch when the same component was already patched forward once for the current detected RKE2 version.
-- Refuses to patch when any stale patch state from a different RKE2 version still exists. In that case, run `rke2-patcher reconcile <component>` for each previously patched component before patching again.
+- Refuses to patch when any stale patch state from a different RKE2 version still exists. In that case, run `rke2-patcher image-reconcile <component>` for each previously patched component before patching again.
 - Refuses to write if the target manifests directory does not exist and suggests setting `RKE2_PATCHER_DATA_DIR`.
 - If one or more `HelmChartConfig` objects already exist in the cluster for the same chart name and namespace, asks for confirmation before attempting a merge.
 - If merge is approved, prints the merged output in dry-run format and asks for a second confirmation before writing.
@@ -114,25 +114,26 @@ rke2-patcher image-patch rke2-traefik --dry-run
 - For `rke2-cilium-operator`, it updates `operator.image.repository` and `operator.image.tag`.
 - For `rke2-ingress-nginx`, it updates `controller.image.repository` and `controller.image.tag`.
 
-### 4) Reconcile one component after an RKE2 upgrade
+### 4) Reconcile one component (stale cleanup or patch revert)
 
 ```bash
-rke2-patcher reconcile rke2-traefik
+rke2-patcher image-reconcile rke2-traefik
 ```
 
-- `reconcile` requires a single `<component>` argument.
+- `image-reconcile` requires a single `<component>` argument.
 - It only touches the `HelmChartConfig` file previously managed for that component.
-- It only acts on state entries recorded for a different RKE2 version than the one currently running.
-- It removes only the patcher-managed image override keys from `valuesContent`, then writes the file back in place.
-- It does not delete the `HelmChartConfig` file; the file update lets RKE2 re-render the chart using bundled defaults from the upgraded release.
-- After the file is updated successfully, the stale state entry for that component is removed.
-- If multiple components were patched before the upgrade, run `reconcile <component>` once for each of them.
+- It first acts on state entries recorded for a different RKE2 version than the one currently running.
+- If no stale entries are found but a same-version patch exists for the component, it asks whether to revert that patch.
+- On approval, it removes only the patcher-managed image override keys from `valuesContent`, then writes the file back in place.
+- It does not delete the `HelmChartConfig` file; the file update lets RKE2 re-render the chart using bundled defaults.
+- After the file is updated successfully, the corresponding processed state entry for that component is removed.
+- If multiple components were patched before the upgrade, run `image-reconcile <component>` once for each of them.
 
 Typical upgrade flow:
 
 1. Patch one or more components with `image-patch`.
 2. Upgrade RKE2.
-3. Run `rke2-patcher reconcile <component>` for each patched component.
+3. Run `rke2-patcher image-reconcile <component>` for each patched component.
 4. Once stale entries are cleared, `image-patch` is allowed again.
 
 ## Supported components
@@ -163,7 +164,7 @@ Typical upgrade flow:
 - Network access to the configured image registry endpoint (`RKE2_PATCHER_REGISTRY`, default `registry.rancher.com`).
 - For `image-cve` default mode (`RKE2_PATCHER_CVE_MODE=cluster`), Kubernetes access that allows creating and reading Jobs/Pods in the scan namespace.
 - For `image-patch`, Kubernetes access that allows reading/writing ConfigMaps in the state namespace (same namespace used by `RKE2_PATCHER_CVE_NAMESPACE`; default `rke2-patcher`).
-- For `reconcile`, access to the same patcher state ConfigMap is required, and the generated `HelmChartConfig` file must still be writable in the manifests directory.
+- For `image-reconcile`, access to the same patcher state ConfigMap is required, and the generated `HelmChartConfig` file must still be writable in the manifests directory.
 - Local scanner installation is optional and only needed when using local mode (`RKE2_PATCHER_CVE_MODE=local`):
   - `trivy`, or
   - `grype`
@@ -191,9 +192,9 @@ The `image-patch` command supports these overrides:
   - RKE2 data directory used to derive the manifest output path.
   - Default: `/var/lib/rancher/rke2`
   - Effective manifests path: `<data-dir>/server/manifests`
-- `RKE2_PATCHER_HELM_NAMESPACE`
-  - `.metadata.namespace` for the generated `HelmChartConfig`.
-  - Default: `kube-system`
+
+- Generated `HelmChartConfig` namespace
+  - Hardcoded: `kube-system`
 
 The `image-cve` command supports these overrides:
 
@@ -228,6 +229,5 @@ Example:
 
 ```bash
 RKE2_PATCHER_DATA_DIR=/var/lib/rancher/rke2 \
-RKE2_PATCHER_HELM_NAMESPACE=kube-system \
 ./rke2-patcher image-patch rke2-traefik
 ```

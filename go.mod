@@ -1,4 +1,4 @@
-module github.com/manuelbuil/PoCs/2026/rke2-patcher
+module github.com/manuelbuil/rke2-patcher
 
 go 1.25.7
 

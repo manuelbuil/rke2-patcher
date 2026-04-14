@@ -1,8 +1,9 @@
 package kube_test
 
-import(
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
+import (
 	"testing"
+
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
 )
 
 func TestScanImageWithTrivyJob(t *testing.T) {

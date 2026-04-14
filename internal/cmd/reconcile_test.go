@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
+	"github.com/manuelbuil/rke2-patcher/internal/components"
 	cli "github.com/urfave/cli/v2"
 )
 
@@ -234,12 +234,12 @@ spec:
 		t.Fatalf("failed to write flannel file: %v", err)
 	}
 
-	traefikComponent, err := components.Resolve("traefik")
+	traefikComponent, err := components.Resolve("rke2-traefik")
 	if err != nil {
 		t.Fatalf("failed to resolve traefik component: %v", err)
 	}
 
-	flannelComponent, err := components.Resolve("flannel")
+	flannelComponent, err := components.Resolve("rke2-flannel")
 	if err != nil {
 		t.Fatalf("failed to resolve flannel component: %v", err)
 	}
@@ -247,9 +247,9 @@ spec:
 	if err := persistPatchLimitDecision(patchLimitDecision{
 		ShouldPersist:  true,
 		StateNamespace: patchLimitStateNamespace(),
-		EntryKey:       patchLimitEntryKey("v1.35.1+rke2r1", traefikComponent.Name),
+		EntryKey:       patchLimitEntryKey("v1.35.1+rke2r1", traefikComponent.Key),
 		Entry: patchLimitEntry{
-			Component:              traefikComponent.Name,
+			Component:              traefikComponent.Key,
 			ClusterVersion:         "v1.35.1+rke2r1",
 			BaselineTag:            "v3.3.0",
 			PatchedToTag:           "v3.4.0",
@@ -263,9 +263,9 @@ spec:
 	if err := persistPatchLimitDecision(patchLimitDecision{
 		ShouldPersist:  true,
 		StateNamespace: patchLimitStateNamespace(),
-		EntryKey:       patchLimitEntryKey("v1.35.1+rke2r1", flannelComponent.Name),
+		EntryKey:       patchLimitEntryKey("v1.35.1+rke2r1", flannelComponent.Key),
 		Entry: patchLimitEntry{
-			Component:              flannelComponent.Name,
+			Component:              flannelComponent.Key,
 			ClusterVersion:         "v1.35.1+rke2r1",
 			BaselineTag:            "v0.9.0",
 			PatchedToTag:           "v1.0.0",
@@ -300,10 +300,10 @@ spec:
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
-	if _, found := state.Entries[patchLimitEntryKey("v1.35.1+rke2r1", traefikComponent.Name)]; found {
+	if _, found := state.Entries[patchLimitEntryKey("v1.35.1+rke2r1", traefikComponent.Key)]; found {
 		t.Fatalf("expected traefik stale state entry to be removed")
 	}
-	if _, found := state.Entries[patchLimitEntryKey("v1.35.1+rke2r1", flannelComponent.Name)]; !found {
+	if _, found := state.Entries[patchLimitEntryKey("v1.35.1+rke2r1", flannelComponent.Key)]; !found {
 		t.Fatalf("expected flannel stale state entry to remain")
 	}
 }
@@ -371,7 +371,7 @@ spec:
 		t.Fatalf("failed to write traefik file: %v", err)
 	}
 
-	traefikComponent, err := components.Resolve("traefik")
+	traefikComponent, err := components.Resolve("rke2-traefik")
 	if err != nil {
 		t.Fatalf("failed to resolve traefik component: %v", err)
 	}
@@ -379,9 +379,9 @@ spec:
 	if err := persistPatchLimitDecision(patchLimitDecision{
 		ShouldPersist:  true,
 		StateNamespace: patchLimitStateNamespace(),
-		EntryKey:       patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Name),
+		EntryKey:       patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Key),
 		Entry: patchLimitEntry{
-			Component:              traefikComponent.Name,
+			Component:              traefikComponent.Key,
 			ClusterVersion:         "v1.35.2+rke2r1",
 			BaselineTag:            "v3.3.0",
 			PatchedToTag:           "v3.4.0",
@@ -412,7 +412,7 @@ spec:
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
-	if _, found := state.Entries[patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Name)]; found {
+	if _, found := state.Entries[patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Key)]; found {
 		t.Fatalf("expected current-version traefik state entry to be removed after approved revert")
 	}
 }
@@ -456,7 +456,7 @@ spec:
 		t.Fatalf("failed to write traefik file: %v", err)
 	}
 
-	traefikComponent, err := components.Resolve("traefik")
+	traefikComponent, err := components.Resolve("rke2-traefik")
 	if err != nil {
 		t.Fatalf("failed to resolve traefik component: %v", err)
 	}
@@ -464,9 +464,9 @@ spec:
 	if err := persistPatchLimitDecision(patchLimitDecision{
 		ShouldPersist:  true,
 		StateNamespace: patchLimitStateNamespace(),
-		EntryKey:       patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Name),
+		EntryKey:       patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Key),
 		Entry: patchLimitEntry{
-			Component:              traefikComponent.Name,
+			Component:              traefikComponent.Key,
 			ClusterVersion:         "v1.35.2+rke2r1",
 			BaselineTag:            "v3.3.0",
 			PatchedToTag:           "v3.4.0",
@@ -493,7 +493,7 @@ spec:
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
-	if _, found := state.Entries[patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Name)]; !found {
+	if _, found := state.Entries[patchLimitEntryKey("v1.35.2+rke2r1", traefikComponent.Key)]; !found {
 		t.Fatalf("expected current-version traefik state entry to remain after rejecting revert")
 	}
 }

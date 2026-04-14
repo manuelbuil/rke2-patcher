@@ -15,8 +15,6 @@ const (
 	dataDirEnv  = "RKE2_PATCHER_DATA_DIR"
 	registryEnv = "RKE2_PATCHER_REGISTRY"
 
-	helmNamespaceEnv = "RKE2_PATCHER_HELM_NAMESPACE"
-
 	defaultDataDir      = "/var/lib/rancher/rke2"
 	defaultNamespace    = "kube-system"
 	defaultRegistryHost = "registry.rancher.com"
@@ -50,7 +48,7 @@ func BuildHelmChartConfigWithDataDir(componentName string, defaultChartConfigNam
 	normalizedComponentName := normalizeHCCFileComponentName(componentName)
 	helmChartConfigFile := normalizedComponentName + "-config-rke2-patcher.yaml"
 	helmChartConfigName := defaultChartConfigName
-	namespace := envOrDefault(helmNamespaceEnv, defaultNamespace)
+	namespace := defaultNamespace
 
 	filePath := filepath.Join(manifestsDir, helmChartConfigFile)
 	content := renderHelmChartConfig(componentName, helmChartConfigName, namespace, imageName, imageTag)

@@ -11,7 +11,6 @@ func TestCollectConfigEntries_Defaults(t *testing.T) {
 	t.Setenv(cveScannerImageEnvName, "")
 	t.Setenv(cveJobTimeoutEnvName, "")
 	t.Setenv(dataDirEnvName, "")
-	t.Setenv(helmNamespaceEnvName, "")
 
 	entries, err := collectConfigEntries()
 	if err != nil {
@@ -31,9 +30,24 @@ func TestCollectConfigEntries_Defaults(t *testing.T) {
 		t.Fatalf("unexpected default scanner mode: %q", scannerMode.Effective)
 	}
 
+	cveNamespace := configEntryByKey(entries, "cve_namespace")
+	if cveNamespace.Effective != "rke2-patcher" {
+		t.Fatalf("unexpected default cve namespace: %q", cveNamespace.Effective)
+	}
+
 	stateNamespace := configEntryByKey(entries, "rke2_patcher_state_namespace")
-	if stateNamespace.Effective != "rke2-patcher" {
-		t.Fatalf("unexpected default patch-limit namespace: %q", stateNamespace.Effective)
+	if stateNamespace.Key != "" {
+		t.Fatalf("expected rke2_patcher_state_namespace to be hidden, got: %#v", stateNamespace)
+	}
+
+	stateKey := configEntryByKey(entries, "rke2_patcher_state_key")
+	if stateKey.Key != "" {
+		t.Fatalf("expected rke2_patcher_state_key to be hidden, got: %#v", stateKey)
+	}
+
+	helmNamespace := configEntryByKey(entries, "helm_namespace")
+	if helmNamespace.Key != "" {
+		t.Fatalf("expected helm_namespace to be hidden, got: %#v", helmNamespace)
 	}
 }
 
@@ -44,7 +58,6 @@ func TestCollectConfigEntries_Overrides(t *testing.T) {
 	t.Setenv(cveScannerImageEnvName, "scanner:1.2.3")
 	t.Setenv(cveJobTimeoutEnvName, "11m")
 	t.Setenv(dataDirEnvName, "/tmp/rke2")
-	t.Setenv(helmNamespaceEnvName, "custom-ns")
 
 	entries, err := collectConfigEntries()
 	if err != nil {
@@ -67,9 +80,24 @@ func TestCollectConfigEntries_Overrides(t *testing.T) {
 		t.Fatalf("unexpected scanner mode source: %q", scannerMode.Source)
 	}
 
+	cveNamespace := configEntryByKey(entries, "cve_namespace")
+	if cveNamespace.Effective != "sec-scan" {
+		t.Fatalf("unexpected overridden cve namespace: %q", cveNamespace.Effective)
+	}
+
 	stateNamespace := configEntryByKey(entries, "rke2_patcher_state_namespace")
-	if stateNamespace.Effective != "sec-scan" {
-		t.Fatalf("unexpected overridden patch-limit namespace: %q", stateNamespace.Effective)
+	if stateNamespace.Key != "" {
+		t.Fatalf("expected rke2_patcher_state_namespace to be hidden, got: %#v", stateNamespace)
+	}
+
+	stateKey := configEntryByKey(entries, "rke2_patcher_state_key")
+	if stateKey.Key != "" {
+		t.Fatalf("expected rke2_patcher_state_key to be hidden, got: %#v", stateKey)
+	}
+
+	helmNamespace := configEntryByKey(entries, "helm_namespace")
+	if helmNamespace.Key != "" {
+		t.Fatalf("expected helm_namespace to be hidden, got: %#v", helmNamespace)
 	}
 }
 

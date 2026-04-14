@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
+	"github.com/manuelbuil/rke2-patcher/internal/components"
 )
 
 func printImageListWithCVEs(component components.Component, tagsToScan []string, currentTag string, previousTag string, cveByTag map[string]cveListEntry, verbose bool) {
-	fmt.Printf("COMPONENT:  %s\n", component.Name)
+	fmt.Printf("COMPONENT:  %s\n", components.CLIName(component.Key))
 	fmt.Printf("REPOSITORY: %s\n\n", component.Repository)
 	fmt.Printf("%-24s %-10s %-10s %s\n", "TAG", "STATUS", "CVE COUNT", "VULNERABILITIES")
 

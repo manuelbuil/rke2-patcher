@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
 )
 
 const cveModeEnv = "RKE2_PATCHER_CVE_MODE"
@@ -101,7 +101,6 @@ func listCVEsForImageInCluster(image string) (ResultCVEs, error) {
 	}
 	return ResultCVEs{}, fmt.Errorf("cluster scanner failed: %v", scanErr)
 }
-
 
 // listCVEsForImagesInCluster scans the given images with the cluster scanner
 func listCVEsForImagesInCluster(targetImages []string) (map[string]ResultCVEs, map[string]error, error) {

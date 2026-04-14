@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
+	"github.com/manuelbuil/rke2-patcher/internal/components"
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
 	cli "github.com/urfave/cli/v2"
 )
 
@@ -29,11 +29,19 @@ func BuildCLIApp() *cli.App {
 				Name:  "version",
 				Usage: "Print version and cluster version",
 			},
+			&cli.BoolFlag{
+				Name:  "config",
+				Usage: "Show effective configuration values",
+			},
 		},
 		Action: func(ctx *cli.Context) error {
 			if ctx.Bool("version") {
 				printVersion()
 				return nil
+			}
+
+			if ctx.Bool("config") {
+				return runConfigCommand(ctx)
 			}
 
 			return cli.ShowAppHelp(ctx)
@@ -42,12 +50,6 @@ func BuildCLIApp() *cli.App {
 			_ = cli.ShowAppHelp(ctx)
 		},
 		Commands: []*cli.Command{
-			{
-				Name:      "config",
-				Usage:     "Show effective configuration values",
-				ArgsUsage: "",
-				Action:    runConfigCommand,
-			},
 			{
 				Name:      "image-cve",
 				Usage:     "List CVEs for the currently running image of a component",
@@ -74,8 +76,8 @@ func BuildCLIApp() *cli.App {
 				Action: runImagePatchCommand,
 			},
 			{
-				Name:      "reconcile",
-				Usage:     "Remove patcher overrides that belong to a previous RKE2 version",
+				Name:      "image-reconcile",
+				Usage:     "Reconcile stale patches or revert current patch for a component",
 				ArgsUsage: "<component>",
 				Action:    runReconcileCommand,
 			},
@@ -199,11 +201,11 @@ func runReconcileCommand(ctx *cli.Context) error {
 func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  rke2-patcher --version")
-	fmt.Println("  rke2-patcher config")
+	fmt.Println("  rke2-patcher --config")
 	fmt.Println("  rke2-patcher image-cve <component>")
 	fmt.Println("  rke2-patcher image-list <component> [--with-cves] [--verbose]")
 	fmt.Println("  rke2-patcher image-patch <component> [--dry-run]")
-	fmt.Println("  rke2-patcher reconcile <component>")
+	fmt.Println("  rke2-patcher image-reconcile <component>")
 	fmt.Println()
 	fmt.Printf("Supported components: %s\n", strings.Join(components.Supported(), ", "))
 	fmt.Println()
@@ -211,7 +213,6 @@ func printUsage() {
 	fmt.Println("  KUBECONFIG                         kubeconfig path (first file in list is used)")
 	fmt.Println("  RKE2_PATCHER_REGISTRY              registry base URL (default: registry.rancher.com)")
 	fmt.Println("  RKE2_PATCHER_DATA_DIR              path to RKE2 data directory")
-	fmt.Println("  RKE2_PATCHER_HELM_NAMESPACE        Helm namespace override")
 	fmt.Println("  RKE2_PATCHER_CVE_MODE              CVE scanner mode (cluster|local)")
 	fmt.Println("  RKE2_PATCHER_CVE_NAMESPACE         namespace for CVE jobs and patch-limit state ConfigMap")
 	fmt.Println("  RKE2_PATCHER_CVE_SCANNER_IMAGE     Trivy scanner image to use")

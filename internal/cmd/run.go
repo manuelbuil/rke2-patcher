@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/cve"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/patcher"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/registry"
+	"github.com/manuelbuil/rke2-patcher/internal/components"
+	"github.com/manuelbuil/rke2-patcher/internal/cve"
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
+	"github.com/manuelbuil/rke2-patcher/internal/patcher"
+	"github.com/manuelbuil/rke2-patcher/internal/registry"
 )
 
 var promptYesNoFn = promptYesNo
@@ -28,7 +28,7 @@ func runCVE(component components.Component) error {
 		return fmt.Errorf("failed to scan image %q: %w", image, err)
 	}
 
-	fmt.Printf("component: %s\n", component.Name)
+	fmt.Printf("component: %s\n", components.CLIName(component.Key))
 	fmt.Printf("image: %s\n", image)
 	fmt.Printf("scanner: %s\n", resultCVEs.Tool)
 
@@ -92,7 +92,7 @@ func runImageList(component components.Component, options imageListOptions) erro
 		}
 	}
 
-	fmt.Printf("component: %s\n", component.Name)
+	fmt.Printf("component: %s\n", components.CLIName(component.Key))
 	fmt.Printf("repository: %s\n", component.Repository)
 	fmt.Printf("running image(s):\n")
 	for _, summary := range runningImages {
@@ -168,14 +168,14 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return err
 	}
 
-	patchDecision, err := evaluatePatchLimit(component.Name, currentImageTag, targetTagName)
+	patchDecision, err := evaluatePatchLimit(component.Key, currentImageTag, targetTagName)
 	if err != nil {
 		return err
 	}
 
-	filePath, generatedContent := patcher.BuildHelmChartConfigWithDataDir(component.Name, component.HelmChartConfigName, currentImageName, targetTagName, "")
+	filePath, generatedContent := patcher.BuildHelmChartConfigWithDataDir(component.Key, component.HelmChartConfigName, currentImageName, targetTagName, "")
 	if options.DryRun {
-		printPatchPreview(component.Name, runningImage, currentImageTag, targetTagName, filePath, generatedContent)
+		printPatchPreview(components.CLIName(component.Key), runningImage, currentImageTag, targetTagName, filePath, generatedContent)
 		return nil
 	}
 
@@ -223,7 +223,7 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		}
 		contentToWrite = mergedContent
 
-		printPatchPreview(component.Name, runningImage, currentImageTag, targetTagName, filePath, contentToWrite)
+		printPatchPreview(components.CLIName(component.Key), runningImage, currentImageTag, targetTagName, filePath, contentToWrite)
 		secondConfirm, err := promptYesNoFn("Apply this HelmChartConfig now? [Yes/No]: ")
 		if err != nil {
 			return err
@@ -255,7 +255,7 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return fmt.Errorf("failed to persist patch-limit state: %w", err)
 	}
 
-	printPatchApplied(component.Name, runningImage, currentImageTag, targetTagName, filePath)
+	printPatchApplied(components.CLIName(component.Key), runningImage, currentImageTag, targetTagName, filePath)
 	return nil
 }
 
@@ -274,7 +274,7 @@ func runReconcile(component components.Component) error {
 	staleKeys := make([]string, 0)
 	currentKeys := make([]string, 0)
 	for key, entry := range state.Entries {
-		if !strings.EqualFold(strings.TrimSpace(entry.Component), strings.TrimSpace(component.Name)) {
+		if !components.SameComponent(entry.Component, component.Key) {
 			continue
 		}
 		if strings.TrimSpace(entry.ClusterVersion) == currentVersion {
@@ -285,13 +285,13 @@ func runReconcile(component components.Component) error {
 	}
 
 	if len(staleKeys) == 0 {
-		componentName := components.CLIName(component.Name)
+		componentName := components.CLIName(component.Key)
 		if len(currentKeys) == 0 {
 			printReconcileAlreadyCurrent(componentName)
 			return nil
 		}
 
-		prompt := fmt.Sprintf("reconcile: component %s: no stale patches found; already up to date. Would you like to revert the patch? [Yes/No]: ", componentName)
+		prompt := fmt.Sprintf("image-reconcile: component %s: no stale patches found; already up to date. Would you like to revert the patch? [Yes/No]: ", componentName)
 		approved, err := promptYesNoFn(prompt)
 		if err != nil {
 			return err

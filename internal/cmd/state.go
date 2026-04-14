@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
-	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
+	"github.com/manuelbuil/rke2-patcher/internal/components"
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -38,7 +38,7 @@ func evaluatePatchLimit(componentName string, currentTag string, targetTag strin
 	for _, entry := range state.Entries {
 		if strings.TrimSpace(entry.ClusterVersion) != clusterVersion {
 			componentName := components.CLIName(entry.Component)
-			return patchLimitDecision{}, fmt.Errorf("refusing to patch: active patch for component %q from RKE2 %s exists; run 'rke2-patcher reconcile %s' first", componentName, entry.ClusterVersion, componentName)
+			return patchLimitDecision{}, fmt.Errorf("refusing to patch: active patch for component %q from RKE2 %s exists; run 'rke2-patcher image-reconcile %s' first", componentName, entry.ClusterVersion, componentName)
 		}
 	}
 
