@@ -70,6 +70,14 @@ func renderCVESummary(entry cveListEntry, verbose bool) (string, string) {
 	return count, fmt.Sprintf("%s...", strings.Join(entry.CVEs[:2], ", "))
 }
 
+func printReconcileApplied(entry patchLimitEntry) {
+	fmt.Printf("reconcile: component %s: stripped patcher overrides (was pinned to %s on RKE2 %s)\n", components.CLIName(entry.Component), entry.PatchedToTag, entry.ClusterVersion)
+}
+
+func printReconcileAlreadyCurrent(componentName string) {
+	fmt.Printf("reconcile: component %s: no stale patches found; already up to date\n", componentName)
+}
+
 func truncateText(value string, maxLength int) string {
 	if maxLength <= 0 {
 		return ""

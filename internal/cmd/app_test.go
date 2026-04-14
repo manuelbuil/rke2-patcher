@@ -261,6 +261,11 @@ func useInMemoryPatchLimitStateBackend(t *testing.T) {
 	stored := patchLimitState{Entries: map[string]patchLimitEntry{}}
 	originalLoad := loadPatchLimitStateFromBackend
 	originalSave := savePatchLimitStateToBackend
+	originalEnsureNamespace := ensureStateNamespace
+
+	ensureStateNamespace = func(_ string) error {
+		return nil
+	}
 
 	loadPatchLimitStateFromBackend = func(_ string) (patchLimitState, string, error) {
 		copied := patchLimitState{Entries: map[string]patchLimitEntry{}}
@@ -282,6 +287,7 @@ func useInMemoryPatchLimitStateBackend(t *testing.T) {
 	t.Cleanup(func() {
 		loadPatchLimitStateFromBackend = originalLoad
 		savePatchLimitStateToBackend = originalSave
+		ensureStateNamespace = originalEnsureNamespace
 	})
 }
 
@@ -323,7 +329,7 @@ func TestEvaluatePatchLimit_OnlyOneForwardPatchPerComponentAndClusterVersion(t *
 	}
 }
 
-func TestEvaluatePatchLimit_AllowsForwardPatchAfterRKE2Upgrade(t *testing.T) {
+func TestEvaluatePatchLimit_RequiresReconcileAfterRKE2Upgrade(t *testing.T) {
 	useInMemoryPatchLimitStateBackend(t)
 
 	clusterVersion := "v1.35.2+rke2r1"
@@ -344,13 +350,13 @@ func TestEvaluatePatchLimit_AllowsForwardPatchAfterRKE2Upgrade(t *testing.T) {
 	}
 
 	clusterVersion = "v1.36.0+rke2r1"
-	secondDecision, err := evaluatePatchLimit("rke2-traefik", "v3.6.8-build20260302", "v3.6.9-build20260303", false)
-	if err != nil {
-		t.Fatalf("expected patch to be allowed after cluster version change, got %v", err)
+	_, err = evaluatePatchLimit("rke2-traefik", "v3.6.8-build20260302", "v3.6.9-build20260303", false)
+	if err == nil {
+		t.Fatalf("expected patch to be blocked until reconcile after cluster version change")
 	}
 
-	if !secondDecision.ShouldPersist {
-		t.Fatalf("expected second patch decision to require persistence")
+	if !strings.Contains(err.Error(), "reconcile") {
+		t.Fatalf("expected reconcile guidance after cluster version change, got %v", err)
 	}
 }
 

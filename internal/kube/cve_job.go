@@ -115,7 +115,7 @@ func ScanImagesWithTrivyJob(images []string, showProgress bool) ([]byte, error) 
 	return runScanJob(images, jobName, progressMessage, showProgress)
 }
 
-//runScanJob handles the logic of creating the scan job and waiting for its completion
+// runScanJob handles the logic of creating the scan job and waiting for its completion
 func runScanJob(targetImages []string, jobName string, progressMessage string, showProgress bool) ([]byte, error) {
 	clientset, err := kubeClientset()
 	if err != nil {
@@ -337,6 +337,16 @@ func ensureNamespaceForScanJob(clientset kubernetes.Interface, namespace string)
 
 	fmt.Printf("Namespace %q created.\n", namespace)
 	return nil
+}
+
+// EnsureNamespace checks if the given namespace exists and prompts the user to create it if it does not.
+// It is the exported counterpart of ensureNamespaceForScanJob and can be called from outside the kube package.
+func EnsureNamespace(namespace string) error {
+	clientset, err := kubeClientset()
+	if err != nil {
+		return err
+	}
+	return ensureNamespaceForScanJob(clientset, namespace)
 }
 
 // namespaceExists queries kube-api to check if the given namespace exists in the cluster

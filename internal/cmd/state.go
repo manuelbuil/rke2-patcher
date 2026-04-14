@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/kube"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -19,6 +20,7 @@ const (
 var (
 	loadPatchLimitStateFromBackend = loadPatchLimitStateFromKubernetes
 	savePatchLimitStateToBackend   = savePatchLimitStateToKubernetes
+	ensureStateNamespace           = kube.EnsureNamespace
 )
 
 func evaluatePatchLimit(componentName string, currentTag string, targetTag string, revert bool) (patchLimitDecision, error) {
@@ -31,6 +33,13 @@ func evaluatePatchLimit(componentName string, currentTag string, targetTag strin
 	state, _, err := loadPatchLimitStateFromBackend(namespace)
 	if err != nil {
 		return patchLimitDecision{}, err
+	}
+
+	for _, entry := range state.Entries {
+		if strings.TrimSpace(entry.ClusterVersion) != clusterVersion {
+			componentName := components.CLIName(entry.Component)
+			return patchLimitDecision{}, fmt.Errorf("refusing to patch: active patch for component %q from RKE2 %s exists; run 'rke2-patcher reconcile %s' first", componentName, entry.ClusterVersion, componentName)
+		}
 	}
 
 	entryKey := patchLimitEntryKey(clusterVersion, componentName)
@@ -84,6 +93,10 @@ func persistPatchLimitDecision(decision patchLimitDecision) error {
 	stateNamespace := strings.TrimSpace(decision.StateNamespace)
 	if stateNamespace == "" {
 		stateNamespace = patchLimitStateNamespace()
+	}
+
+	if err := ensureStateNamespace(stateNamespace); err != nil {
+		return err
 	}
 
 	for attempt := 0; attempt < 5; attempt++ {
@@ -167,6 +180,42 @@ func savePatchLimitStateToKubernetes(namespace string, state patchLimitState, re
 	}
 
 	return nil
+}
+
+func staleEntryKeys(state patchLimitState, currentVersion string) []string {
+	var keys []string
+	for key, entry := range state.Entries {
+		if strings.TrimSpace(entry.ClusterVersion) != currentVersion {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func removeEntriesFromState(namespace string, keysToRemove []string) error {
+	for attempt := 0; attempt < 5; attempt++ {
+		state, resourceVersion, err := loadPatchLimitStateFromBackend(namespace)
+		if err != nil {
+			return err
+		}
+
+		for _, key := range keysToRemove {
+			delete(state.Entries, key)
+		}
+
+		err = savePatchLimitStateToBackend(namespace, state, resourceVersion)
+		if err == nil {
+			return nil
+		}
+
+		if k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err) {
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("failed to remove stale entries from state in ConfigMap %s/%s after retries", namespace, kube.StateConfigMapName)
 }
 
 func ensureManifestsDirectoryExists(filePath string) error {

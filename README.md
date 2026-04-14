@@ -22,6 +22,7 @@ rke2-patcher config
 rke2-patcher image-cve <component>
 rke2-patcher image-list <component> [--with-cves] [--verbose]
 rke2-patcher image-patch <component> [--dry-run] [--revert]
+rke2-patcher reconcile <component>
 ```
 
 - `--version` always prints the CLI version and also tries to print the connected cluster version (`gitVersion`) from Kubernetes API `/version`.
@@ -31,9 +32,9 @@ Make targets:
 
 ```bash
 make version
-make image-cve COMPONENT=traefik
-make image-list COMPONENT=traefik
-make image-patch COMPONENT=traefik
+make image-cve COMPONENT=rke2-traefik
+make image-list COMPONENT=rke2-traefik
+make image-patch COMPONENT=rke2-traefik
 ```
 
 ### 0) Show effective configuration
@@ -48,7 +49,7 @@ rke2-patcher config
 ### 1) CVEs of current running image
 
 ```bash
-rke2-patcher image-cve traefik
+rke2-patcher image-cve rke2-traefik
 ```
 
 - Looks up the current running image in the cluster for the selected component.
@@ -65,15 +66,15 @@ rke2-patcher image-cve traefik
 ### 2) List available images (tags)
 
 ```bash
-rke2-patcher image-list traefik
+rke2-patcher image-list rke2-traefik
 ```
 
 ```bash
-rke2-patcher image-list traefik --with-cves
+rke2-patcher image-list rke2-traefik --with-cves
 ```
 
 ```bash
-rke2-patcher image-list traefik --with-cves --verbose
+rke2-patcher image-list rke2-traefik --with-cves --verbose
 ```
 
 - Lists release tags from the configured registry for the selected component repository, ordered newest-first (higher build date first), with current and previous tags included.
@@ -89,15 +90,15 @@ rke2-patcher image-list traefik --with-cves --verbose
 ### 3) Patch to next image
 
 ```bash
-rke2-patcher image-patch traefik
+rke2-patcher image-patch rke2-traefik
 ```
 
 ```bash
-rke2-patcher image-patch traefik --dry-run
+rke2-patcher image-patch rke2-traefik --dry-run
 ```
 
 ```bash
-rke2-patcher image-patch traefik --revert
+rke2-patcher image-patch rke2-traefik --revert
 ```
 
 - Detects the current running image repository in-cluster.
@@ -107,32 +108,55 @@ rke2-patcher image-patch traefik --revert
 - Refuses to patch when current tag is already the newest available tag.
 - Refuses to patch when the target tag would move to a newer minor release.
 - Refuses to patch when the same component was already patched forward once for the current detected RKE2 version.
+- Refuses to patch when any stale patch state from a different RKE2 version still exists. In that case, run `rke2-patcher reconcile <component>` for each previously patched component before patching again.
 - Refuses to revert when current tag is already the oldest available tag in the observed list.
 - Refuses to revert when there is no recorded baseline for the component on the current detected RKE2 version.
 - Refuses to revert when the target tag is older than the recorded release baseline for the component on the current detected RKE2 version.
 - Refuses to write if the target manifests directory does not exist and suggests setting `RKE2_PATCHER_DATA_DIR`.
 - If one or more `HelmChartConfig` objects already exist in the cluster for the same chart name and namespace, asks for confirmation before attempting a merge.
 - If merge is approved, prints the merged output in dry-run format and asks for a second confirmation before writing.
-- For `canal-calico`, it updates the chart values under `calico.cniImage`, `calico.nodeImage`, `calico.flexvolImage`, and `calico.kubeControllerImage`.
-- For `canal-flannel`, it updates the chart values under `flannel.image.repository` and `flannel.image.tag`.
-- For `calico-operator`, it updates `tigeraOperator.image`, `tigeraOperator.version`, and `tigeraOperator.registry`.
-- For `cilium-operator`, it updates `operator.image.repository` and `operator.image.tag`.
-- For `ingress-nginx`, it updates `controller.image.repository` and `controller.image.tag`.
+- Generated image/repository lines are marked with `# change made by rke2-patcher` so patcher-managed overrides are easy to identify during review.
+- For `rke2-canal-calico`, it updates the chart values under `calico.cniImage`, `calico.nodeImage`, `calico.flexvolImage`, and `calico.kubeControllerImage`.
+- For `rke2-canal-flannel`, it updates the chart values under `flannel.image.repository` and `flannel.image.tag`.
+- For `rke2-calico-operator`, it updates `tigeraOperator.image`, `tigeraOperator.version`, and `tigeraOperator.registry`.
+- For `rke2-cilium-operator`, it updates `operator.image.repository` and `operator.image.tag`.
+- For `rke2-ingress-nginx`, it updates `controller.image.repository` and `controller.image.tag`.
+
+### 4) Reconcile one component after an RKE2 upgrade
+
+```bash
+rke2-patcher reconcile rke2-traefik
+```
+
+- `reconcile` requires a single `<component>` argument.
+- It only touches the `HelmChartConfig` file previously managed for that component.
+- It only acts on state entries recorded for a different RKE2 version than the one currently running.
+- It removes only the patcher-managed image override keys from `valuesContent`, then writes the file back in place.
+- It does not delete the `HelmChartConfig` file; the file update lets RKE2 re-render the chart using bundled defaults from the upgraded release.
+- After the file is updated successfully, the stale state entry for that component is removed.
+- If multiple components were patched before the upgrade, run `reconcile <component>` once for each of them.
+
+Typical upgrade flow:
+
+1. Patch one or more components with `image-patch`.
+2. Upgrade RKE2.
+3. Run `rke2-patcher reconcile <component>` for each patched component.
+4. Once stale entries are cleared, `image-patch` is allowed again.
 
 ## Supported components
 
-- `traefik` -> `rancher/hardened-traefik`
-- `ingress-nginx` -> `rancher/nginx-ingress-controller`
-- `coredns` -> `rancher/hardened-coredns`
-- `dns-node-cache` -> `rancher/hardened-dns-node-cache`
-- `calico-operator` -> `rancher/mirrored-calico-operator`
-- `cilium-operator` -> `rancher/mirrored-cilium-operator-generic`
-- `metrics-server` -> `rancher/hardened-k8s-metrics-server`
-- `flannel` -> `rancher/hardened-flannel`
-- `canal-calico` -> `rancher/hardened-calico`
-- `canal-flannel` -> `rancher/hardened-flannel`
-- `coredns-cluster-autoscaler` -> `rancher/hardened-cluster-autoscaler`
-- `snapshot-controller` -> `rancher/hardened-snapshot-controller`
+- `rke2-traefik` -> `rancher/hardened-traefik`
+- `rke2-ingress-nginx` -> `rancher/nginx-ingress-controller`
+- `rke2-coredns` -> `rancher/hardened-coredns`
+- `rke2-dns-node-cache` -> `rancher/hardened-dns-node-cache`
+- `rke2-calico-operator` -> `rancher/mirrored-calico-operator`
+- `rke2-cilium-operator` -> `rancher/mirrored-cilium-operator-generic`
+- `rke2-metrics-server` -> `rancher/hardened-k8s-metrics-server`
+- `rke2-flannel` -> `rancher/hardened-flannel`
+- `rke2-canal-calico` -> `rancher/hardened-calico`
+- `rke2-canal-flannel` -> `rancher/hardened-flannel`
+- `rke2-coredns-cluster-autoscaler` -> `rancher/hardened-cluster-autoscaler`
+- `rke2-snapshot-controller` -> `rancher/hardened-snapshot-controller`
 
 ## Requirements
 
@@ -147,6 +171,7 @@ rke2-patcher image-patch traefik --revert
 - Network access to the configured image registry endpoint (`RKE2_PATCHER_REGISTRY`, default `registry.rancher.com`).
 - For `image-cve` default mode (`RKE2_PATCHER_CVE_MODE=cluster`), Kubernetes access that allows creating and reading Jobs/Pods in the scan namespace.
 - For `image-patch`, Kubernetes access that allows reading/writing ConfigMaps in the state namespace (same namespace used by `RKE2_PATCHER_CVE_NAMESPACE`; default `rke2-patcher`).
+- For `reconcile`, access to the same patcher state ConfigMap is required, and the generated `HelmChartConfig` file must still be writable in the manifests directory.
 - Local scanner installation is optional and only needed when using local mode (`RKE2_PATCHER_CVE_MODE=local`):
   - `trivy`, or
   - `grype`
@@ -212,5 +237,5 @@ Example:
 ```bash
 RKE2_PATCHER_DATA_DIR=/var/lib/rancher/rke2 \
 RKE2_PATCHER_HELM_NAMESPACE=kube-system \
-./rke2-patcher image-patch traefik
+./rke2-patcher image-patch rke2-traefik
 ```

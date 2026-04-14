@@ -47,7 +47,8 @@ func BuildHelmChartConfig(componentName string, defaultChartConfigName string, i
 func BuildHelmChartConfigWithDataDir(componentName string, defaultChartConfigName string, imageName string, imageTag string, dataDirOverride string) (string, string) {
 	manifestsDir := resolveManifestsDir(dataDirOverride)
 
-	helmChartConfigFile := componentName + "-config-rke2-patcher.yaml"
+	normalizedComponentName := normalizeHCCFileComponentName(componentName)
+	helmChartConfigFile := normalizedComponentName + "-config-rke2-patcher.yaml"
 	helmChartConfigName := defaultChartConfigName
 	namespace := envOrDefault(helmNamespaceEnv, defaultNamespace)
 
@@ -55,6 +56,19 @@ func BuildHelmChartConfigWithDataDir(componentName string, defaultChartConfigNam
 	content := renderHelmChartConfig(componentName, helmChartConfigName, namespace, imageName, imageTag)
 
 	return filePath, content
+}
+
+func normalizeHCCFileComponentName(componentName string) string {
+	trimmed := strings.TrimSpace(componentName)
+	if trimmed == "" {
+		return "rke2-component"
+	}
+
+	if strings.HasPrefix(strings.ToLower(trimmed), "rke2-") {
+		return trimmed
+	}
+
+	return "rke2-" + trimmed
 }
 
 func resolveManifestsDir(dataDirOverride string) string {
@@ -322,6 +336,102 @@ func deepMergeValue(base any, overlay any) any {
 	return deepCopyValue(overlay)
 }
 
+func ExtractValuesContent(fileContent string) (string, error) {
+	doc, err := parseSingleHelmChartConfig(fileContent)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse HelmChartConfig: %w", err)
+	}
+
+	value, _ := stringField(doc.Spec, "valuesContent")
+	return value, nil
+}
+
+func SubtractPatcherValuesContent(existingFileContent, generatedValuesContent string) (string, error) {
+	existingDoc, err := parseSingleHelmChartConfig(existingFileContent)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse existing HelmChartConfig: %w", err)
+	}
+
+	existingValuesStr, hasExisting := stringField(existingDoc.Spec, "valuesContent")
+	if !hasExisting || strings.TrimSpace(existingValuesStr) == "" {
+		return existingFileContent, nil
+	}
+
+	trimmedGenerated := strings.TrimSpace(generatedValuesContent)
+	if trimmedGenerated == "" {
+		return existingFileContent, nil
+	}
+
+	var generatedValues map[string]any
+	if err := yaml.Unmarshal([]byte(trimmedGenerated), &generatedValues); err != nil {
+		return "", fmt.Errorf("failed to parse generated valuesContent: %w", err)
+	}
+
+	var existingValues map[string]any
+	if err := yaml.Unmarshal([]byte(existingValuesStr), &existingValues); err != nil {
+		return "", fmt.Errorf("failed to parse existing valuesContent: %w", err)
+	}
+
+	resultValues := deepSubtractMap(existingValues, generatedValues)
+
+	updatedSpec := deepCopyMap(existingDoc.Spec)
+	if len(resultValues) == 0 {
+		delete(updatedSpec, "valuesContent")
+	} else {
+		b, err := yaml.Marshal(resultValues)
+		if err != nil {
+			return "", fmt.Errorf("failed to serialize updated valuesContent: %w", err)
+		}
+		updatedSpec["valuesContent"] = strings.TrimRight(string(b), "\n")
+	}
+
+	updatedDoc := helmChartConfigDoc{
+		APIVersion: existingDoc.APIVersion,
+		Kind:       existingDoc.Kind,
+		Metadata: metadataRef{
+			Name:      existingDoc.Metadata.Name,
+			Namespace: existingDoc.Metadata.Namespace,
+		},
+		Spec: updatedSpec,
+	}
+
+	result, err := yaml.Marshal(updatedDoc)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize updated HelmChartConfig: %w", err)
+	}
+
+	if len(result) == 0 || result[len(result)-1] != '\n' {
+		result = append(result, '\n')
+	}
+
+	return string(result), nil
+}
+
+func deepSubtractMap(base, toRemove map[string]any) map[string]any {
+	result := deepCopyMap(base)
+	for key, removeValue := range toRemove {
+		existingValue, found := result[key]
+		if !found {
+			continue
+		}
+
+		removeMap, removeIsMap := removeValue.(map[string]any)
+		existingMap, existingIsMap := existingValue.(map[string]any)
+
+		if removeIsMap && existingIsMap {
+			subtracted := deepSubtractMap(existingMap, removeMap)
+			if len(subtracted) == 0 {
+				delete(result, key)
+			} else {
+				result[key] = subtracted
+			}
+		} else {
+			delete(result, key)
+		}
+	}
+	return result
+}
+
 func renderHelmChartConfig(componentName string, chartName string, namespace string, imageName string, imageTag string) string {
 	valuesContent := renderValuesContent(componentName, chartName, imageName, imageTag)
 
@@ -345,17 +455,17 @@ func renderValuesContent(componentName string, chartName string, imageName strin
 
 		registryHost := configuredRegistryHost()
 
-		return fmt.Sprintf(`    tigeraOperator:
-      image: %s
-      version: %s
-	      registry: %s`, image, imageTag, registryHost)
+		return fmt.Sprintf(`    tigeraOperator: # change made by rke2-patcher
+      image: %s # change made by rke2-patcher
+      version: %s # change made by rke2-patcher
+      registry: %s # change made by rke2-patcher`, image, imageTag, registryHost)
 	}
 
 	if strings.EqualFold(strings.TrimSpace(componentName), "ingress-nginx") || strings.EqualFold(strings.TrimSpace(chartName), "rke2-ingress-nginx") {
-		return fmt.Sprintf(`    controller:
-      image:
-        repository: %s
-        tag: %s`, imageName, imageTag)
+		return fmt.Sprintf(`    controller: # change made by rke2-patcher
+      image: # change made by rke2-patcher
+        repository: %s # change made by rke2-patcher
+        tag: %s # change made by rke2-patcher`, imageName, imageTag)
 	}
 
 	if strings.EqualFold(strings.TrimSpace(componentName), "cilium-operator") || strings.EqualFold(strings.TrimSpace(chartName), "rke2-cilium") {
@@ -364,38 +474,39 @@ func renderValuesContent(componentName string, chartName string, imageName strin
 			repository = imageName
 		}
 
-		return fmt.Sprintf(`    operator:
-      image:
-        repository: %s
-        tag: %s`, repository, imageTag)
+		return fmt.Sprintf(`    operator: # change made by rke2-patcher
+      image: # change made by rke2-patcher
+        repository: %s # change made by rke2-patcher
+        tag: %s # change made by rke2-patcher`, repository, imageTag)
 	}
 
 	if strings.EqualFold(strings.TrimSpace(componentName), "canal") || strings.EqualFold(strings.TrimSpace(componentName), "canal-calico") {
-		return fmt.Sprintf(`    calico:
-      cniImage:
-        repository: %s
-        tag: %s
-      nodeImage:
-        repository: %s
-        tag: %s
-      flexvolImage:
-        repository: %s
-        tag: %s
-      kubeControllerImage:
-        repository: %s
-        tag: %s`, imageName, imageTag, imageName, imageTag, imageName, imageTag, imageName, imageTag)
+		return fmt.Sprintf("    calico: # change made by rke2-patcher\n"+
+			"      cniImage: # change made by rke2-patcher\n"+
+			"        repository: %s # change made by rke2-patcher\n"+
+			"        tag: %s # change made by rke2-patcher\n"+
+			"      nodeImage: # change made by rke2-patcher\n"+
+			"        repository: %s # change made by rke2-patcher\n"+
+			"        tag: %s # change made by rke2-patcher\n"+
+			"      flexvolImage: # change made by rke2-patcher\n"+
+			"        repository: %s # change made by rke2-patcher\n"+
+			"        tag: %s # change made by rke2-patcher\n"+
+			"      kubeControllerImage: # change made by rke2-patcher\n"+
+			"        repository: %s # change made by rke2-patcher\n"+
+			"        tag: %s # change made by rke2-patcher",
+			imageName, imageTag, imageName, imageTag, imageName, imageTag, imageName, imageTag)
 	}
 
 	if strings.EqualFold(strings.TrimSpace(componentName), "canal-flannel") {
-		return fmt.Sprintf(`    flannel:
-		image:
-		  repository: %s
-		  tag: %s`, imageName, imageTag)
+		return fmt.Sprintf(`    flannel: # change made by rke2-patcher
+      image: # change made by rke2-patcher
+        repository: %s # change made by rke2-patcher
+        tag: %s # change made by rke2-patcher`, imageName, imageTag)
 	}
 
-	return fmt.Sprintf(`    image:
-      repository: %s
-      tag: %s`, imageName, imageTag)
+	return fmt.Sprintf(`    image: # change made by rke2-patcher
+      repository: %s # change made by rke2-patcher
+      tag: %s # change made by rke2-patcher`, imageName, imageTag)
 }
 
 func envOrDefault(key string, fallback string) string {

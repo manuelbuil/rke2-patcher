@@ -20,15 +20,17 @@ type patchLimitState struct {
 }
 
 type patchLimitEntry struct {
-	Component      string `json:"component"`
-	ClusterVersion string `json:"clusterVersion"`
-	BaselineTag    string `json:"baselineTag"`
-	PatchedToTag   string `json:"patchedToTag"`
+	Component              string `json:"component"`
+	ClusterVersion         string `json:"clusterVersion"`
+	BaselineTag            string `json:"baselineTag"`
+	PatchedToTag           string `json:"patchedToTag"`
+	FilePath               string `json:"filePath,omitempty"`
+	GeneratedValuesContent string `json:"generatedValuesContent,omitempty"`
 }
 
 type patchLimitDecision struct {
-	ShouldPersist bool // when reverting we don't persist it
+	ShouldPersist  bool // when reverting we don't persist it
 	StateNamespace string
-	EntryKey      string
-	Entry         patchLimitEntry
+	EntryKey       string
+	Entry          patchLimitEntry
 }

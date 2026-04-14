@@ -11,7 +11,7 @@ import (
 	cli "github.com/urfave/cli/v2"
 )
 
-const version = "0.8.3"
+const version = "0.9.1"
 const usageExitCode = 2
 
 var clusterVersionResolver = kube.ClusterVersion
@@ -73,6 +73,12 @@ func BuildCLIApp() *cli.App {
 					&cli.BoolFlag{Name: "revert", Usage: "Revert to the previous eligible tag"},
 				},
 				Action: runImagePatchCommand,
+			},
+			{
+				Name:      "reconcile",
+				Usage:     "Remove patcher overrides that belong to a previous RKE2 version",
+				ArgsUsage: "<component>",
+				Action:    runReconcileCommand,
 			},
 		},
 	}
@@ -178,6 +184,19 @@ func runImagePatchCommand(ctx *cli.Context) error {
 	return runImagePatch(component, options)
 }
 
+func runReconcileCommand(ctx *cli.Context) error {
+	if err := validateNoExtraArgs(ctx); err != nil {
+		return err
+	}
+
+	component, err := resolveComponentForCommand(ctx)
+	if err != nil {
+		return err
+	}
+
+	return runReconcile(component)
+}
+
 // printUsage prints a help menu describing how the tool must be used
 func printUsage() {
 	fmt.Println("Usage:")
@@ -186,6 +205,7 @@ func printUsage() {
 	fmt.Println("  rke2-patcher image-cve <component>")
 	fmt.Println("  rke2-patcher image-list <component> [--with-cves] [--verbose]")
 	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--revert]")
+	fmt.Println("  rke2-patcher reconcile <component>")
 	fmt.Println()
 	fmt.Printf("Supported components: %s\n", strings.Join(components.Supported(), ", "))
 	fmt.Println()

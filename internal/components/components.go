@@ -145,6 +145,7 @@ var registry = map[string]Component{
 // Resolves the component struct of the chosen component
 func Resolve(name string) (Component, error) {
 	key := strings.ToLower(strings.TrimSpace(name))
+	key = strings.TrimPrefix(key, "rke2-")
 	component, found := registry[key]
 	if !found {
 		return Component{}, fmt.Errorf("unsupported component %q", name)
@@ -156,9 +157,33 @@ func Resolve(name string) (Component, error) {
 func Supported() []string {
 	items := make([]string, 0, len(registry))
 	for name := range registry {
-		items = append(items, name)
+		items = append(items, "rke2-"+name)
 	}
 	sort.Strings(items)
 
 	return items
+}
+
+func CLIName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(strings.ToLower(trimmed), "rke2-") {
+		return strings.ToLower(trimmed)
+	}
+
+	key := strings.ToLower(trimmed)
+	if _, found := registry[key]; found {
+		return "rke2-" + key
+	}
+
+	for registryKey, component := range registry {
+		if strings.EqualFold(strings.TrimSpace(component.Name), trimmed) {
+			return "rke2-" + registryKey
+		}
+	}
+
+	return trimmed
 }

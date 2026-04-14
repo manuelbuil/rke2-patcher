@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/components"
 	"github.com/manuelbuil/PoCs/2026/rke2-patcher/internal/cve"
@@ -40,7 +43,7 @@ func runCVE(component components.Component) error {
 	return nil
 }
 
-//runImageList lists the available tags for the component
+// runImageList lists the available tags for the component
 func runImageList(component components.Component, options imageListOptions) error {
 	runningImages, err := kube.ListRunningImages(component.Workload, component.Repository)
 	if err != nil {
@@ -174,6 +177,13 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return nil
 	}
 
+	generatedValuesContent, err := patcher.ExtractValuesContent(generatedContent)
+	if err != nil {
+		return fmt.Errorf("failed to extract generated valuesContent: %w", err)
+	}
+	patchDecision.Entry.FilePath = filePath
+	patchDecision.Entry.GeneratedValuesContent = generatedValuesContent
+
 	targetName, targetNamespace, err := patcher.HelmChartConfigIdentityFromContent(generatedContent)
 	if err != nil {
 		return err
@@ -225,13 +235,111 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 	if err := ensureManifestsDirectoryExists(filePath); err != nil {
 		return err
 	}
+
+	writeTime := time.Now()
 	if err := patcher.WriteHelmChartConfigContent(filePath, contentToWrite); err != nil {
 		return err
 	}
+
+	// Verify the file was actually written: it must exist and its modification
+	// time must be >= the moment we called Write, ruling out a stale pre-existing
+	// file that was untouched due to a silent failure.
+	if err := verifyFileWritten(filePath, writeTime); err != nil {
+		return fmt.Errorf("file verification failed after write: %w", err)
+	}
+
+	// Persist patch-limit state only after the file is confirmed on disk.
 	if err := persistPatchLimitDecision(patchDecision); err != nil {
-		return fmt.Errorf("wrote HelmChartConfig, but failed to persist patch-limit state: %w", err)
+		return fmt.Errorf("failed to persist patch-limit state: %w", err)
 	}
 
 	printPatchApplied(component.Name, runningImage, currentImageTag, targetTagName, filePath)
+	return nil
+}
+
+func runReconcile(component components.Component) error {
+	currentVersion, err := clusterVersionResolver()
+	if err != nil {
+		return fmt.Errorf("failed to resolve cluster version: %w", err)
+	}
+
+	namespace := patchLimitStateNamespace()
+	state, _, err := loadPatchLimitStateFromBackend(namespace)
+	if err != nil {
+		return err
+	}
+
+	staleKeys := make([]string, 0)
+	for key, entry := range state.Entries {
+		if strings.TrimSpace(entry.ClusterVersion) == currentVersion {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(entry.Component), strings.TrimSpace(component.Name)) {
+			continue
+		}
+		staleKeys = append(staleKeys, key)
+	}
+
+	if len(staleKeys) == 0 {
+		printReconcileAlreadyCurrent(components.CLIName(component.Name))
+		return nil
+	}
+
+	for _, key := range staleKeys {
+		entry := state.Entries[key]
+		if err := reconcileEntry(entry); err != nil {
+			return fmt.Errorf("failed to reconcile component %q: %w", entry.Component, err)
+		}
+		printReconcileApplied(entry)
+	}
+
+	return removeEntriesFromState(namespace, staleKeys)
+}
+
+// verifyFileWritten checks that filePath exists and was last modified no earlier
+// than writeTime, confirming a recent successful write rather than a stale file.
+func verifyFileWritten(filePath string, writeTime time.Time) error {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("file %q not found after write: %w", filePath, err)
+	}
+	// Truncate to second precision: most filesystems store mtime at 1-second
+	// granularity, so comparing with a nanosecond-precise writeTime would
+	// spuriously fail when both timestamps fall within the same second.
+	if info.ModTime().Before(writeTime.Truncate(time.Second)) {
+		return fmt.Errorf("file %q exists but was not updated (mtime %s predates write at %s)",
+			filePath, info.ModTime().Format(time.RFC3339), writeTime.Format(time.RFC3339))
+	}
+	return nil
+}
+
+func reconcileEntry(entry patchLimitEntry) error {
+	filePath := strings.TrimSpace(entry.FilePath)
+	if filePath == "" {
+		return nil
+	}
+
+	generatedValuesContent := strings.TrimSpace(entry.GeneratedValuesContent)
+	if generatedValuesContent == "" {
+		return nil
+	}
+
+	existingContent, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read HelmChartConfig file %q: %w", filePath, err)
+	}
+
+	updatedContent, err := patcher.SubtractPatcherValuesContent(string(existingContent), generatedValuesContent)
+	if err != nil {
+		return fmt.Errorf("failed to strip patcher values from %q: %w", filePath, err)
+	}
+
+	if err := patcher.WriteHelmChartConfigContent(filePath, updatedContent); err != nil {
+		return fmt.Errorf("failed to write updated HelmChartConfig to %q: %w", filePath, err)
+	}
+
 	return nil
 }
