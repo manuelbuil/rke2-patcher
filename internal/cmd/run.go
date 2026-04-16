@@ -155,7 +155,8 @@ func runImageListWithCVEs(component components.Component, imageName, currentTag 
 }
 
 // runImagePatch attempts to patch the running image of the component to a new tag by writing a HelmChartConfig manifest
-//  with the new image, handling potential conflicts with existing HelmChartConfigs and respecting patch limits
+//
+//	with the new image, handling potential conflicts with existing HelmChartConfigs and respecting patch limits
 func runImagePatch(component components.Component, options imagePatchOptions) error {
 	runningImages, err := kube.ListRunningImages(component.Workload, component.Repository)
 	if err != nil {
@@ -298,24 +299,43 @@ func runReconcile(component components.Component) error {
 
 		for _, key := range currentKeys {
 			entry := state.Entries[key]
-			if err := reconcileEntry(entry); err != nil {
+			reconciled, err := reconcileEntry(entry)
+			if err != nil {
 				return fmt.Errorf("failed to reconcile component %q: %w", entry.Component, err)
 			}
+			if !reconciled {
+				continue
+			}
 			printReconcileApplied(entry)
+			staleKeys = append(staleKeys, key)
 		}
 
-		return removeEntriesFromState(namespace, currentKeys)
+		if len(staleKeys) == 0 {
+			return nil
+		}
+
+		return removeEntriesFromState(namespace, staleKeys)
 	}
 
+	keysToRemove := make([]string, 0, len(staleKeys))
 	for _, key := range staleKeys {
 		entry := state.Entries[key]
-		if err := reconcileEntry(entry); err != nil {
+		reconciled, err := reconcileEntry(entry)
+		if err != nil {
 			return fmt.Errorf("failed to reconcile component %q: %w", entry.Component, err)
 		}
+		if !reconciled {
+			continue
+		}
 		printReconcileApplied(entry)
+		keysToRemove = append(keysToRemove, key)
 	}
 
-	return removeEntriesFromState(namespace, staleKeys)
+	if len(keysToRemove) == 0 {
+		return nil
+	}
+
+	return removeEntriesFromState(namespace, keysToRemove)
 }
 
 // verifyFileWritten checks that filePath exists and was last modified no earlier
@@ -335,33 +355,39 @@ func verifyFileWritten(filePath string, writeTime time.Time) error {
 	return nil
 }
 
-func reconcileEntry(entry patchEntry) error {
+// reconcileEntry removes the patcher values from the HelmChartConfig file specified in the entry
+func reconcileEntry(entry patchEntry) (bool, error) {
 	filePath := strings.TrimSpace(entry.FilePath)
 	if filePath == "" {
-		return nil
+		return false, nil
 	}
 
 	generatedValuesContent := strings.TrimSpace(entry.GeneratedValuesContent)
 	if generatedValuesContent == "" {
-		return nil
+		return false, nil
 	}
 
 	existingContent, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("failed to read HelmChartConfig file %q: %w", filePath, err)
+		return false, fmt.Errorf("failed to read HelmChartConfig file %q: %w", filePath, err)
 	}
 
 	updatedContent, err := patcher.SubtractPatcherValuesContent(string(existingContent), generatedValuesContent)
 	if err != nil {
-		return fmt.Errorf("failed to strip patcher values from %q: %w", filePath, err)
+		return false, fmt.Errorf("failed to strip patcher values from %q: %w", filePath, err)
 	}
 
+	writeTime := time.Now()
 	if err := patcher.WriteHelmChartConfigContent(filePath, updatedContent); err != nil {
-		return fmt.Errorf("failed to write updated HelmChartConfig to %q: %w", filePath, err)
+		return false, fmt.Errorf("failed to write updated HelmChartConfig to %q: %w", filePath, err)
 	}
 
-	return nil
+	if err := verifyFileWritten(filePath, writeTime); err != nil {
+		return false, fmt.Errorf("failed to verify reconciled HelmChartConfig %q: %w", filePath, err)
+	}
+
+	return true, nil
 }

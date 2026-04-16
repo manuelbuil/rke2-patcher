@@ -141,8 +141,12 @@ spec:
 		GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
 	}
 
-	if err := reconcileEntry(entry); err != nil {
+	reconciled, err := reconcileEntry(entry)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !reconciled {
+		t.Fatalf("expected reconcileEntry to report successful reconciliation")
 	}
 
 	updated, err := os.ReadFile(filePath)
@@ -167,8 +171,12 @@ func TestReconcileEntry_NoOpForLegacyEntryWithoutFilePath(t *testing.T) {
 		FilePath:       "",
 	}
 
-	if err := reconcileEntry(entry); err != nil {
+	reconciled, err := reconcileEntry(entry)
+	if err != nil {
 		t.Fatalf("unexpected error for legacy entry: %v", err)
+	}
+	if reconciled {
+		t.Fatalf("expected legacy entry without file path to be skipped")
 	}
 }
 
@@ -180,8 +188,56 @@ func TestReconcileEntry_NoOpWhenFileDoesNotExist(t *testing.T) {
 		GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
 	}
 
-	if err := reconcileEntry(entry); err != nil {
+	reconciled, err := reconcileEntry(entry)
+	if err != nil {
 		t.Fatalf("unexpected error when file does not exist: %v", err)
+	}
+	if reconciled {
+		t.Fatalf("expected missing-file entry to be skipped")
+	}
+}
+
+func TestRunReconcile_DoesNotRemoveStateWhenFileIsMissing(t *testing.T) {
+	useInMemoryPatchStateBackend(t)
+
+	originalResolver := clusterVersionResolver
+	clusterVersionResolver = func() (string, error) {
+		return "v1.35.2+rke2r1", nil
+	}
+	t.Cleanup(func() {
+		clusterVersionResolver = originalResolver
+	})
+
+	traefikComponent, err := components.Resolve("rke2-traefik")
+	if err != nil {
+		t.Fatalf("failed to resolve traefik component: %v", err)
+	}
+
+	if err := persistPatchDecision(patchStateWrite{
+		StateNamespace: patchStateNamespace(),
+		EntryName:      "v1.35.1+rke2r1|" + traefikComponent.Name,
+		Entry: patchEntry{
+			Component:              traefikComponent.Name,
+			ClusterVersion:         "v1.35.1+rke2r1",
+			BaselineTag:            "v3.3.0",
+			PatchedToTag:           "v3.4.0",
+			FilePath:               "/nonexistent/path/rke2-traefik-config-rke2-patcher.yaml",
+			GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
+		},
+	}); err != nil {
+		t.Fatalf("failed to persist traefik state: %v", err)
+	}
+
+	if err := runReconcile(traefikComponent); err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+
+	state, _, err := loadPatchStateFromBackend(patchStateNamespace())
+	if err != nil {
+		t.Fatalf("failed to load state: %v", err)
+	}
+	if _, found := state.Entries["v1.35.1+rke2r1|"+traefikComponent.Name]; !found {
+		t.Fatalf("expected stale state entry to remain when reconcile file is missing")
 	}
 }
 

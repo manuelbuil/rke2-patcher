@@ -35,6 +35,55 @@ make version
 make image-cve COMPONENT=rke2-traefik
 make image-list COMPONENT=rke2-traefik
 make image-patch COMPONENT=rke2-traefik
+make test-docker-default
+make test-docker-calico-traefik
+```
+
+## Docker scenario tests (Ginkgo)
+
+The repository includes Docker end-to-end scenario tests, modeled after the RKE2 Docker test style:
+
+- Test locations:
+  - `tests/docker/default_components/default_components_test.go`
+  - `tests/docker/calico_traefik/calico_traefik_test.go`
+- Shared harness: `tests/docker/testutils.go`
+- CI workflow: `.github/workflows/docker-tests.yaml`
+
+What this first scenario does:
+
+1. Deploys an RKE2 server in Docker with `v1.35.3+rke2r3` and standard configuration.
+2. Waits for the default core components to become ready.
+3. Runs `rke2-patcher image-cve` and verifies CVEs are reported for:
+  - `rke2-coredns`
+  - `rke2-coredns-cluster-autoscaler`
+  - `rke2-canal-flannel`
+  - `rke2-ingress-nginx`
+  - `rke2-metrics-server`
+  - `rke2-snapshot-controller`
+
+  What the second scenario does:
+
+  1. Deploys an RKE2 server in Docker with `v1.35.3+rke2r3` and config:
+    - `cni: calico`
+    - `ingress-controller: traefik`
+  2. Runs:
+    - `image-list rke2-traefik`
+    - `image-list --with-cves rke2-calico-operator`
+  3. Verifies both commands return expected listing output.
+
+Run locally:
+
+```bash
+make test-docker-default
+make test-docker-calico-traefik
+```
+
+Or directly:
+
+```bash
+go build -o ./bin/rke2-patcher .
+go test -v -timeout=80m ./tests/docker/default_components/default_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./bin/rke2-patcher
+go test -v -timeout=80m ./tests/docker/calico_traefik/calico_traefik_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./bin/rke2-patcher
 ```
 
 ### 0) Show effective configuration

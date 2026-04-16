@@ -1,0 +1,44 @@
+name: Docker Scenario Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-scenarios:
+    name: RKE2 docker scenarios
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - default_components
+          - calico_traefik
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build rke2-patcher binary
+        run: |
+          mkdir -p ./bin
+          go build -o ./bin/rke2-patcher .
+
+      - name: Load required kernel modules
+        run: |
+          sudo modprobe br_netfilter overlay
+
+      - name: Run docker scenario test
+        run: |
+          go test -v -timeout=80m ./tests/docker/${{ matrix.scenario }}/${{ matrix.scenario }}_test.go -ginkgo.v -ci -rke2Version v1.35.3+rke2r3 -patcherBin ./bin/rke2-patcher

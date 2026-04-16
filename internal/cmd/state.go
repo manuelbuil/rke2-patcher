@@ -170,6 +170,8 @@ func staleEntryKeys(state patchState, currentVersion string) []string {
 	return keys
 }
 
+// removeEntriesFromState attempts to remove entries from the patch state in Kubernetes ConfigMap, 
+// retrying on conflicts to handle concurrent updates
 func removeEntriesFromState(namespace string, keysToRemove []string) error {
 	for attempt := 0; attempt < 5; attempt++ {
 		state, resourceVersion, err := loadPatchStateFromBackend(namespace)
