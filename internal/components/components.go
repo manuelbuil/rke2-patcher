@@ -56,24 +56,6 @@ var registry = map[string]Component{
 			Name:      "node-local-dns",
 		},
 	},
-	"rke2-calico-operator": {
-		Repository:          "rancher/mirrored-calico-operator",
-		HelmChartConfigName: "rke2-calico",
-		Workload: WorkloadRef{
-			Kind:      "deployment",
-			Namespace: "tigera-operator",
-			Name:      "tigera-operator",
-		},
-	},
-	"rke2-cilium-operator": {
-		Repository:          "rancher/mirrored-cilium-operator-generic",
-		HelmChartConfigName: "rke2-cilium",
-		Workload: WorkloadRef{
-			Kind:      "deployment",
-			Namespace: "kube-system",
-			Name:      "cilium-operator",
-		},
-	},
 	"rke2-metrics-server": {
 		Repository:          "rancher/hardened-k8s-metrics-server",
 		HelmChartConfigName: "rke2-metrics-server",
@@ -112,7 +94,7 @@ var registry = map[string]Component{
 	},
 	"rke2-coredns-cluster-autoscaler": {
 		Repository:          "rancher/hardened-cluster-autoscaler",
-		HelmChartConfigName: "rke2-cluster-autoscaler",
+		HelmChartConfigName: "rke2-coredns",
 		Workload: WorkloadRef{
 			Kind:      "deployment",
 			Namespace: "kube-system",

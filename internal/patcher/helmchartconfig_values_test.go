@@ -7,62 +7,7 @@ import (
 
 const patcherComment = "# change made by rke2-patcher"
 
-func TestRenderValuesContent_CalicoOperatorRegistryFromEnv(t *testing.T) {
-	tests := []struct {
-		name             string
-		registryEnvValue string
-		imageName        string
-		expectedRegistry string
-		expectedImage    string
-	}{
-		{
-			name:             "default registry when unset",
-			registryEnvValue: "",
-			imageName:        "docker.io/rancher/mirrored-calico-operator",
-			expectedRegistry: "registry.rancher.com",
-			expectedImage:    "rancher/mirrored-calico-operator",
-		},
-		{
-			name:             "custom registry host with scheme",
-			registryEnvValue: "https://registry-1.docker.io",
-			imageName:        "registry-1.docker.io/rancher/mirrored-calico-operator",
-			expectedRegistry: "registry-1.docker.io",
-			expectedImage:    "rancher/mirrored-calico-operator",
-		},
-		{
-			name:             "image without registry prefix remains unchanged",
-			registryEnvValue: "registry.example.local:5000",
-			imageName:        "rancher/mirrored-calico-operator",
-			expectedRegistry: "registry.example.local:5000",
-			expectedImage:    "rancher/mirrored-calico-operator",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(registryEnv, tt.registryEnvValue)
-
-			values := renderValuesContent("rke2-calico-operator", "rke2-calico", tt.imageName, "v3.31.0")
-
-			expectedRegistryLine := "registry: " + tt.expectedRegistry
-			if !strings.Contains(values, expectedRegistryLine) {
-				t.Fatalf("expected valuesContent to contain %q, got:\n%s", expectedRegistryLine, values)
-			}
-
-			expectedImageLine := "image: " + tt.expectedImage
-			if !strings.Contains(values, expectedImageLine) {
-				t.Fatalf("expected valuesContent to contain %q, got:\n%s", expectedImageLine, values)
-			}
-		})
-	}
-}
-
 func TestRenderValuesContent_AddsPatcherCommentToImageAndRepositoryLines(t *testing.T) {
-	valuesForCalico := renderValuesContent("rke2-calico-operator", "rke2-calico", "docker.io/rancher/mirrored-calico-operator", "v3.31.0")
-	if !strings.Contains(valuesForCalico, "image: rancher/mirrored-calico-operator # change made by rke2-patcher") {
-		t.Fatalf("expected calico image line to include patcher comment, got:\n%s", valuesForCalico)
-	}
-
 	valuesForIngress := renderValuesContent("rke2-ingress-nginx", "rke2-ingress-nginx", "rancher/hardened-ingress-nginx", "v1.0.0")
 	if !strings.Contains(valuesForIngress, "repository: rancher/hardened-ingress-nginx # change made by rke2-patcher") {
 		t.Fatalf("expected ingress repository line to include patcher comment, got:\n%s", valuesForIngress)
@@ -82,10 +27,9 @@ func TestRenderValuesContent_AllGeneratedLinesHavePatcherComment(t *testing.T) {
 	}{
 		{name: "default", componentName: "rke2-traefik", chartName: "rke2-traefik", imageName: "rancher/hardened-traefik", imageTag: "v3.6.9"},
 		{name: "ingress nginx", componentName: "rke2-ingress-nginx", chartName: "rke2-ingress-nginx", imageName: "rancher/hardened-ingress-nginx", imageTag: "v1.0.0"},
-		{name: "calico operator", componentName: "rke2-calico-operator", chartName: "rke2-calico", imageName: "docker.io/rancher/mirrored-calico-operator", imageTag: "v3.31.0"},
-		{name: "cilium operator", componentName: "rke2-cilium-operator", chartName: "rke2-cilium", imageName: "rancher/mirrored-cilium-operator-generic", imageTag: "v1.17.5"},
 		{name: "canal calico", componentName: "rke2-canal-calico", chartName: "rke2-canal", imageName: "rancher/hardened-calico", imageTag: "v1.0.0"},
 		{name: "canal flannel", componentName: "rke2-canal-flannel", chartName: "rke2-canal", imageName: "rancher/hardened-flannel", imageTag: "v1.0.0"},
+		{name: "coredns autoscaler", componentName: "rke2-coredns-cluster-autoscaler", chartName: "rke2-coredns", imageName: "rancher/hardened-cluster-autoscaler", imageTag: "v1.10.3"},
 	}
 
 	for _, tt := range tests {
@@ -114,9 +58,9 @@ func TestBuildHelmChartConfigWithDataDir_GeneratedContentParsesForPatchedCompone
 	}{
 		{name: "default", componentName: "rke2-traefik", chartName: "rke2-traefik", imageName: "rancher/hardened-traefik", imageTag: "v3.6.9"},
 		{name: "ingress nginx", componentName: "rke2-ingress-nginx", chartName: "rke2-ingress-nginx", imageName: "rancher/hardened-ingress-nginx", imageTag: "v1.0.0"},
-		{name: "calico operator", componentName: "rke2-calico-operator", chartName: "rke2-calico", imageName: "docker.io/rancher/mirrored-calico-operator", imageTag: "v3.31.0"},
 		{name: "canal calico", componentName: "rke2-canal-calico", chartName: "rke2-canal", imageName: "rancher/hardened-calico", imageTag: "v1.0.0"},
 		{name: "canal flannel", componentName: "rke2-canal-flannel", chartName: "rke2-canal", imageName: "rancher/hardened-flannel", imageTag: "v1.0.0"},
+		{name: "coredns autoscaler", componentName: "rke2-coredns-cluster-autoscaler", chartName: "rke2-coredns", imageName: "rancher/hardened-cluster-autoscaler", imageTag: "v1.10.3"},
 	}
 
 	for _, tt := range tests {
@@ -135,5 +79,17 @@ func TestRenderValuesContent_CanalCalicoPatchesFourCalicoImageKeys(t *testing.T)
 
 	if !strings.Contains(values, "cniImage:") || !strings.Contains(values, "nodeImage:") || !strings.Contains(values, "flexvolImage:") || !strings.Contains(values, "kubeControllerImage:") {
 		t.Fatalf("expected canal-calico values to patch cni/node/flexvol/kubeController images, got:\n%s", values)
+	}
+}
+
+func TestRenderValuesContent_CoreDNSClusterAutoscalerUsesAutoscalerImageKeys(t *testing.T) {
+	values := renderValuesContent("rke2-coredns-cluster-autoscaler", "rke2-coredns", "rancher/hardened-cluster-autoscaler", "v1.10.3")
+
+	if !strings.Contains(values, "autoscaler:") || !strings.Contains(values, "image:") {
+		t.Fatalf("expected coredns-cluster-autoscaler values to patch autoscaler.image keys, got:\n%s", values)
+	}
+
+	if !strings.Contains(values, "repository: rancher/hardened-cluster-autoscaler") || !strings.Contains(values, "tag: v1.10.3") {
+		t.Fatalf("expected coredns-cluster-autoscaler values to include repository/tag override, got:\n%s", values)
 	}
 }

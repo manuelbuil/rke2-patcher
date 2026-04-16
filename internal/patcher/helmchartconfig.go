@@ -42,11 +42,16 @@ func WriteHelmChartConfigContent(filePath string, content string) error {
 	return nil
 }
 
-// BuildHelmChartConfig generates the file path and content for a HelmChartConfig manifest
+// BuildHelmChartConfig generates the file path and content for a HelmChartConfig manifest.
+//
+// The file name is derived from the target HelmChartConfig/chart name rather than the
+// component name so multiple components that patch the same chart (for example
+// `rke2-canal-flannel` and `rke2-canal-calico`) converge on the same manifest file and
+// can be merged on subsequent patch runs.
 func BuildHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, string, string) {
 	manifestsDir := resolveManifestsDir()
 
-	helmChartConfigFile := componentName + "-config-rke2-patcher.yaml"
+	helmChartConfigFile := defaultChartConfigName + "-config-rke2-patcher.yaml"
 
 	filePath := filepath.Join(manifestsDir, helmChartConfigFile)
 	valuesContent := renderValuesContent(componentName, defaultChartConfigName, imageName, imageTag)
@@ -389,38 +394,11 @@ spec:
 
 // renderValuesContent generates the valuesContent block for the HelmChartConfig based on the component and chart names
 func renderValuesContent(componentName string, chartName string, imageName string, imageTag string) string {
-	if strings.EqualFold(chartName, "rke2-calico") {
-		image := imageRepositoryWithoutRegistry(imageName)
-		if image == "" {
-			image = strings.TrimSpace(imageName)
-		}
-
-		// rke2-calico-operator has the registry parameter
-		registryHost := configuredRegistryHost()
-
-		return fmt.Sprintf(`    tigeraOperator: # change made by rke2-patcher
-      image: %s # change made by rke2-patcher
-      version: %s # change made by rke2-patcher
-      registry: %s # change made by rke2-patcher`, image, imageTag, registryHost)
-	}
-
 	if strings.EqualFold(chartName, "rke2-ingress-nginx") {
 		return fmt.Sprintf(`    controller: # change made by rke2-patcher
       image: # change made by rke2-patcher
         repository: %s # change made by rke2-patcher
         tag: %s # change made by rke2-patcher`, imageName, imageTag)
-	}
-
-	if strings.EqualFold(chartName, "rke2-cilium") {
-		repository := strings.TrimSuffix(strings.TrimSpace(imageName), "-generic")
-		if repository == "" {
-			repository = imageName
-		}
-
-		return fmt.Sprintf(`    operator: # change made by rke2-patcher
-      image: # change made by rke2-patcher
-        repository: %s # change made by rke2-patcher
-        tag: %s # change made by rke2-patcher`, repository, imageTag)
 	}
 
 	if strings.EqualFold(componentName, "rke2-canal-calico") {
@@ -442,6 +420,20 @@ func renderValuesContent(componentName string, chartName string, imageName strin
 
 	if strings.EqualFold(componentName, "rke2-canal-flannel") {
 		return fmt.Sprintf(`    flannel: # change made by rke2-patcher
+      image: # change made by rke2-patcher
+        repository: %s # change made by rke2-patcher
+        tag: %s # change made by rke2-patcher`, imageName, imageTag)
+	}
+
+	if strings.EqualFold(componentName, "rke2-flannel") {
+		return fmt.Sprintf(`    flannel:
+      image:
+        repository: %s
+        tag: %s`, imageName, imageTag)
+	}
+
+	if strings.EqualFold(componentName, "rke2-coredns-cluster-autoscaler") {
+		return fmt.Sprintf(`    autoscaler: # change made by rke2-patcher
       image: # change made by rke2-patcher
         repository: %s # change made by rke2-patcher
         tag: %s # change made by rke2-patcher`, imageName, imageTag)

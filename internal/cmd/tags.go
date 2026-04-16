@@ -10,12 +10,14 @@ import (
 )
 
 type comparableTag struct {
-	Name   string
-	Major  int
-	Minor  int
-	Patch  int
-	Build  int
-	Flavor string //hardened or empty
+	Name         string
+	Major        int
+	Minor        int
+	Patch        int
+	Build        int
+	Flavor       string
+	FlavorBase   string
+	FlavorNumber int
 }
 
 // orderedComparableTags takes raw registry tags, parses and sorts them from newest to oldest based on comparableTag fields
@@ -46,6 +48,12 @@ func orderedComparableTags(tags []registry.Tag) []string {
 		}
 		if left.Patch != right.Patch {
 			return left.Patch > right.Patch
+		}
+		if left.FlavorBase != right.FlavorBase {
+			return left.FlavorBase > right.FlavorBase
+		}
+		if left.FlavorNumber != right.FlavorNumber {
+			return left.FlavorNumber > right.FlavorNumber
 		}
 		if left.Flavor != right.Flavor {
 			return left.Flavor > right.Flavor
@@ -86,19 +94,23 @@ func parseComparableTag(tagName string) (comparableTag, bool) {
 		return comparableTag{}, false
 	}
 
+	build := 0
+	versionAndFlavor := name[1:]
 	buildMarker := "-build"
-	buildIndex := strings.LastIndex(name, buildMarker)
-	if buildIndex <= 1 || buildIndex+len(buildMarker) >= len(name) {
-		return comparableTag{}, false
+	if buildIndex := strings.LastIndex(name, buildMarker); buildIndex > 1 {
+		if buildIndex+len(buildMarker) >= len(name) {
+			return comparableTag{}, false
+		}
+
+		buildValue := name[buildIndex+len(buildMarker):]
+		parsedBuild, err := strconv.Atoi(buildValue)
+		if err != nil {
+			return comparableTag{}, false
+		}
+		build = parsedBuild
+		versionAndFlavor = name[1:buildIndex]
 	}
 
-	buildValue := name[buildIndex+len(buildMarker):]
-	build, err := strconv.Atoi(buildValue)
-	if err != nil {
-		return comparableTag{}, false
-	}
-
-	versionAndFlavor := name[1:buildIndex]
 	versionCore := versionAndFlavor
 	flavor := ""
 	if dashIndex := strings.Index(versionAndFlavor, "-"); dashIndex >= 0 {
@@ -126,14 +138,45 @@ func parseComparableTag(tagName string) (comparableTag, bool) {
 		return comparableTag{}, false
 	}
 
+	flavorBase, flavorNumber := splitFlavor(flavor)
+
 	return comparableTag{
-		Name:   name,
-		Major:  major,
-		Minor:  minor,
-		Patch:  patch,
-		Build:  build,
-		Flavor: flavor,
+		Name:         name,
+		Major:        major,
+		Minor:        minor,
+		Patch:        patch,
+		Build:        build,
+		Flavor:       flavor,
+		FlavorBase:   flavorBase,
+		FlavorNumber: flavorNumber,
 	}, true
+}
+
+func splitFlavor(flavor string) (string, int) {
+	trimmed := strings.TrimSpace(flavor)
+	if trimmed == "" {
+		return "", 0
+	}
+
+	splitIndex := len(trimmed)
+	for splitIndex > 0 {
+		ch := trimmed[splitIndex-1]
+		if ch < '0' || ch > '9' {
+			break
+		}
+		splitIndex--
+	}
+
+	if splitIndex == len(trimmed) {
+		return trimmed, 0
+	}
+
+	number, err := strconv.Atoi(trimmed[splitIndex:])
+	if err != nil {
+		return trimmed, 0
+	}
+
+	return trimmed[:splitIndex], number
 }
 
 // compareComparableTags compares two comparableTag items and returns an integer indicating their relative order (newer vs older)
@@ -158,6 +201,18 @@ func compareComparableTags(left comparableTag, right comparableTag) int {
 	}
 	if left.Patch != right.Patch {
 		if left.Patch > right.Patch {
+			return 1
+		}
+		return -1
+	}
+	if left.FlavorBase != right.FlavorBase {
+		if left.FlavorBase > right.FlavorBase {
+			return 1
+		}
+		return -1
+	}
+	if left.FlavorNumber != right.FlavorNumber {
+		if left.FlavorNumber > right.FlavorNumber {
 			return 1
 		}
 		return -1

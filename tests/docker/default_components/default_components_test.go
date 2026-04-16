@@ -34,7 +34,7 @@ var _ = Describe("Default components CVE scan", Ordered, func() {
 			Expect(tc.ProvisionServer()).To(Succeed())
 			Eventually(func() error {
 				return tc.CheckNodesReady(1)
-			}, "40s", "5s").Should(Succeed())
+			}, "120s", "5s").Should(Succeed())
 			Eventually(func(g Gomega) {
 				g.Expect(tc.CheckDefaultDeploymentsAndDaemonSets()).To(Succeed())
 			}, "240s", "5s").Should(Succeed())
@@ -47,6 +47,7 @@ var _ = Describe("Default components CVE scan", Ordered, func() {
 			"rke2-coredns",
 			"rke2-coredns-cluster-autoscaler",
 			"rke2-canal-flannel",
+			"rke2-canal-calico",
 			"rke2-ingress-nginx",
 			"rke2-metrics-server",
 			"rke2-snapshot-controller",

@@ -14,7 +14,7 @@ help:
 	@echo "  make test-docker-calico-traefik"
 
 build:
-	go build -o $(BINARY) .
+	CGO_ENABLED=0 go build -o $(BINARY) .
 
 version: build
 	./$(BINARY) --version
@@ -28,8 +28,14 @@ image-list: build
 image-patch: build
 	./$(BINARY) image-patch $(COMPONENT)
 
-test-docker-default: build
+test-docker-image-cve: build
 	go test -v -timeout=80m ./tests/docker/default_components/default_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
-test-docker-calico-traefik: build
-	go test -v -timeout=80m ./tests/docker/calico_traefik/calico_traefik_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+test-docker-image-list: build
+	go test -v -timeout=80m ./tests/docker/flannel_traefik/flannel_traefik_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+
+test-docker-image-patcher: build
+	go test -v -timeout=80m ./tests/docker/patch_components/patch_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+
+test-docker-image-patcher-traefik-flannel: build
+	go test -v -timeout=80m ./tests/docker/flannel_traefik_patch_components/traefik_flannel_patch_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)

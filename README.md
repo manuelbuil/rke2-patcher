@@ -5,7 +5,7 @@
 ## Build
 
 ```bash
-go build -o rke2-patcher .
+CGO_ENABLED=0 go build -o rke2-patcher .
 ```
 
 Or with Make:
@@ -21,7 +21,7 @@ rke2-patcher --version
 rke2-patcher --config
 rke2-patcher image-cve <component>
 rke2-patcher image-list <component> [--with-cves] [--verbose]
-rke2-patcher image-patch <component> [--dry-run]
+rke2-patcher image-patch <component> [--dry-run] [--yes|-y]
 rke2-patcher image-reconcile <component>
 ```
 
@@ -35,8 +35,9 @@ make version
 make image-cve COMPONENT=rke2-traefik
 make image-list COMPONENT=rke2-traefik
 make image-patch COMPONENT=rke2-traefik
-make test-docker-default
-make test-docker-calico-traefik
+make test-docker-image-cve
+make test-docker-image-list
+make test-docker-image-patcher
 ```
 
 ## Docker scenario tests (Ginkgo)
@@ -45,7 +46,8 @@ The repository includes Docker end-to-end scenario tests, modeled after the RKE2
 
 - Test locations:
   - `tests/docker/default_components/default_components_test.go`
-  - `tests/docker/calico_traefik/calico_traefik_test.go`
+  - `tests/docker/flannel_traefik/flannel_traefik_test.go`
+  - `tests/docker/patch_components/patch_components_test.go`
 - Shared harness: `tests/docker/testutils.go`
 - CI workflow: `.github/workflows/docker-tests.yaml`
 
@@ -61,29 +63,19 @@ What this first scenario does:
   - `rke2-metrics-server`
   - `rke2-snapshot-controller`
 
-  What the second scenario does:
-
-  1. Deploys an RKE2 server in Docker with `v1.35.3+rke2r3` and config:
-    - `cni: calico`
-    - `ingress-controller: traefik`
-  2. Runs:
-    - `image-list rke2-traefik`
-    - `image-list --with-cves rke2-calico-operator`
-  3. Verifies both commands return expected listing output.
-
 Run locally:
 
 ```bash
-make test-docker-default
-make test-docker-calico-traefik
+make test-docker-image-cve
+make test-docker-image-list
+make test-docker-image-patcher
 ```
 
 Or directly:
 
 ```bash
-go build -o ./bin/rke2-patcher .
+CGO_ENABLED=0 go build -o ./bin/rke2-patcher .
 go test -v -timeout=80m ./tests/docker/default_components/default_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./bin/rke2-patcher
-go test -v -timeout=80m ./tests/docker/calico_traefik/calico_traefik_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./bin/rke2-patcher
 ```
 
 ### 0) Show effective configuration
@@ -146,6 +138,10 @@ rke2-patcher image-patch rke2-traefik
 rke2-patcher image-patch rke2-traefik --dry-run
 ```
 
+```bash
+rke2-patcher image-patch rke2-traefik --yes
+```
+
 - Detects the current running image repository in-cluster.
 - Picks the next newer tag from `registry.rancher.com` and writes a `HelmChartConfig` manifest with that tag.
 - With `--dry-run`, prints the exact `HelmChartConfig` that would be written and does not write any file.
@@ -156,11 +152,11 @@ rke2-patcher image-patch rke2-traefik --dry-run
 - Refuses to write if the target manifests directory does not exist and suggests setting `RKE2_PATCHER_DATA_DIR`.
 - If one or more `HelmChartConfig` objects already exist in the cluster for the same chart name and namespace, asks for confirmation before attempting a merge.
 - If merge is approved, prints the merged output in dry-run format and asks for a second confirmation before writing.
+- With `--yes` (or `-y`), those merge/apply confirmations are auto-approved for non-interactive runs (for example CI).
 - Generated image/repository lines are marked with `# change made by rke2-patcher` so patcher-managed overrides are easy to identify during review.
 - For `rke2-canal-calico`, it updates the chart values under `calico.cniImage`, `calico.nodeImage`, `calico.flexvolImage`, and `calico.kubeControllerImage`.
 - For `rke2-canal-flannel`, it updates the chart values under `flannel.image.repository` and `flannel.image.tag`.
-- For `rke2-calico-operator`, it updates `tigeraOperator.image`, `tigeraOperator.version`, and `tigeraOperator.registry`.
-- For `rke2-cilium-operator`, it updates `operator.image.repository` and `operator.image.tag`.
+- For `rke2-coredns-cluster-autoscaler`, it patches the shared `rke2-coredns` chart and updates `autoscaler.image.repository` and `autoscaler.image.tag`.
 - For `rke2-ingress-nginx`, it updates `controller.image.repository` and `controller.image.tag`.
 
 ### 4) Reconcile one component (stale cleanup or patch revert)
@@ -191,8 +187,6 @@ Typical upgrade flow:
 - `rke2-ingress-nginx` -> `rancher/nginx-ingress-controller`
 - `rke2-coredns` -> `rancher/hardened-coredns`
 - `rke2-dns-node-cache` -> `rancher/hardened-dns-node-cache`
-- `rke2-calico-operator` -> `rancher/mirrored-calico-operator`
-- `rke2-cilium-operator` -> `rancher/mirrored-cilium-operator-generic`
 - `rke2-metrics-server` -> `rancher/hardened-k8s-metrics-server`
 - `rke2-flannel` -> `rancher/hardened-flannel`
 - `rke2-canal-calico` -> `rancher/hardened-calico`
@@ -224,13 +218,16 @@ General tag-registry override:
 
 - `RKE2_PATCHER_REGISTRY`
   - Registry endpoint used to list available tags for `image-list` and `image-patch`.
-  - Also used by `image-patch` when generating `calico-operator` values (`tigeraOperator.registry`).
   - Default: `registry.rancher.com`
   - Accepted forms: `registry.example.local`, `registry.example.local:5000`, `https://registry.example.local`, `http://registry.example.local:5000`
   - Behavior: tag listing starts unauthenticated, then follows Bearer challenge flow only if the registry returns `401` with `WWW-Authenticate: Bearer ...`.
   - To use Docker Hub instead: `RKE2_PATCHER_REGISTRY=registry-1.docker.io` (all Rancher component images are mirrored there publicly).
 
 The `image-patch` command supports these overrides:
+
+- `--yes` / `-y`
+  - Non-interactive mode for merge/apply confirmations when an existing `HelmChartConfig` is present.
+  - Useful in CI and automated tests to avoid stdin prompt failures.
 
 - `KUBECONFIG`
   - Optional kubeconfig path used when service account auth is not available.

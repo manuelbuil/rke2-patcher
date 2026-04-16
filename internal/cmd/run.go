@@ -200,13 +200,17 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 			fmt.Printf("- %s/%s\n", conflict.Namespace, conflict.Name)
 		}
 
-		firstConfirm, err := promptYesNoFn("Merging generated and existing HelmChartConfig values will be tried. Continue? [Yes/No]: ")
-		if err != nil {
-			return err
-		}
-		if !firstConfirm {
-			fmt.Println("aborted: merge was not approved")
-			return nil
+		if !options.AutoApprove {
+			firstConfirm, err := promptYesNoFn("Merging generated and existing HelmChartConfig values will be tried. Continue? [Yes/No]: ")
+			if err != nil {
+				return err
+			}
+			if !firstConfirm {
+				fmt.Println("aborted: merge was not approved")
+				return nil
+			}
+		} else {
+			fmt.Println("auto-approve enabled: proceeding with merge")
 		}
 
 		existingContents := make([]string, 0, len(conflicts))
@@ -221,13 +225,17 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		contentToWrite = mergedContent
 
 		printPatchPreview(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, filePath, contentToWrite)
-		secondConfirm, err := promptYesNoFn("Apply this HelmChartConfig now? [Yes/No]: ")
-		if err != nil {
-			return err
-		}
-		if !secondConfirm {
-			fmt.Println("aborted: write was not approved")
-			return nil
+		if !options.AutoApprove {
+			secondConfirm, err := promptYesNoFn("Apply this HelmChartConfig now? [Yes/No]: ")
+			if err != nil {
+				return err
+			}
+			if !secondConfirm {
+				fmt.Println("aborted: write was not approved")
+				return nil
+			}
+		} else {
+			fmt.Println("auto-approve enabled: applying generated HelmChartConfig")
 		}
 	}
 

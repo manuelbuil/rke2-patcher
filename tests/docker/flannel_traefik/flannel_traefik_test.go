@@ -17,27 +17,27 @@ var (
 	tc *docker.TestConfig
 )
 
-func Test_DockerCalicoTraefik(t *testing.T) {
+func Test_DockerFlannelTraefik(t *testing.T) {
 	RegisterFailHandler(Fail)
 	flag.Parse()
-	RunSpecs(t, "RKE2 Patcher Docker Calico + Traefik Suite")
+	RunSpecs(t, "RKE2 Patcher Docker Flannel + Traefik Suite")
 }
 
-var _ = Describe("Calico and Traefik image-list", Ordered, func() {
+var _ = Describe("Flannel and Traefik image-list", Ordered, func() {
 	Context("Setup cluster", func() {
-		It("deploys an RKE2 server with calico CNI and traefik ingress-controller", func() {
+		It("deploys an RKE2 server with flannel CNI and traefik ingress-controller", func() {
 			var err error
 			tc, err = docker.NewTestConfig(*rke2Version, *patcherBin)
 			Expect(err).NotTo(HaveOccurred())
 
-			tc.ServerConfig = "cni: calico\ningress-controller: traefik\n"
+			tc.ServerConfig = "cni: flannel\ningress-controller: traefik\n"
 
 			Expect(tc.ProvisionServer()).To(Succeed())
 			Eventually(func() error {
 				return tc.CheckNodesReady(1)
-			}, "50s", "5s").Should(Succeed())
+			}, "120s", "5s").Should(Succeed())
 			Eventually(func(g Gomega) {
-				g.Expect(tc.CheckCalicoTraefikDeploymentsAndDaemonSets()).To(Succeed())
+				g.Expect(tc.CheckFlannelTraefikDeploymentsAndDaemonSets()).To(Succeed())
 			}, "350s", "5s").Should(Succeed())
 			Expect(tc.EnsureScannerNamespace()).To(Succeed())
 		})
@@ -51,10 +51,10 @@ var _ = Describe("Calico and Traefik image-list", Ordered, func() {
 			Expect(output).To(ContainSubstring("available tags ("))
 		})
 
-		It("lists tags with CVEs for rke2-calico-operator", func() {
-			output, err := tc.RunImageList("rke2-calico-operator", true)
+		It("lists tags with CVEs for rke2-flannel", func() {
+			output, err := tc.RunImageList("rke2-flannel", true)
 			Expect(err).NotTo(HaveOccurred(), output)
-			Expect(output).To(ContainSubstring("COMPONENT:  rke2-calico-operator"))
+			Expect(output).To(ContainSubstring("COMPONENT:  rke2-flannel"))
 			Expect(output).To(ContainSubstring("CVE COUNT"))
 		})
 	})

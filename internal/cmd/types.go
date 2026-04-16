@@ -6,7 +6,8 @@ type imageListOptions struct {
 }
 
 type imagePatchOptions struct {
-	DryRun bool
+	DryRun      bool
+	AutoApprove bool
 }
 
 type cveListEntry struct {

@@ -13,6 +13,7 @@ import (
 )
 
 const scannerNamespace = "rke2-patcher"
+const nodePatcherBinaryPath = "/usr/local/bin/rke2-patcher-test"
 
 type TestConfig struct {
 	TestDir        string
@@ -112,7 +113,6 @@ func (config *TestConfig) ProvisionServer() error {
 		"-v", "/sys/fs/bpf:/sys/fs/bpf",
 		"-v", "/lib/modules:/lib/modules",
 		"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
-		"-v", "/sys/fs/cgroup:/run/cilium/cgroupv2",
 		"rancher/systemd-node:v0.0.5",
 		"/usr/lib/systemd/systemd --unit=noop.target --show-status=true",
 	}, " ")
@@ -146,6 +146,27 @@ func (config *TestConfig) ProvisionServer() error {
 
 	if err := config.CopyAndModifyKubeconfig(); err != nil {
 		return err
+	}
+
+	if err := config.CopyPatcherBinaryToServer(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (config *TestConfig) CopyPatcherBinaryToServer() error {
+	if strings.TrimSpace(config.Server.Name) == "" {
+		return fmt.Errorf("server is not provisioned")
+	}
+
+	copyCmd := fmt.Sprintf("docker cp %s %s:%s", config.PatcherBinary, config.Server.Name, nodePatcherBinaryPath)
+	if out, err := RunCommand(copyCmd); err != nil {
+		return fmt.Errorf("failed to copy patcher binary into server: %s: %w", out, err)
+	}
+
+	if out, err := config.Server.RunCmdOnNode("chmod +x " + nodePatcherBinaryPath); err != nil {
+		return fmt.Errorf("failed to chmod patcher binary in server: %s: %w", out, err)
 	}
 
 	return nil
@@ -209,9 +230,9 @@ func (config *TestConfig) CheckDefaultDeploymentsAndDaemonSets() error {
 	return nil
 }
 
-func (config *TestConfig) CheckCalicoTraefikDeploymentsAndDaemonSets() error {
-	if out, err := config.Server.RunKubectl("-n tigera-operator rollout status deployment/tigera-operator --timeout=10s"); err != nil {
-		return fmt.Errorf("deployment tigera-operator not ready yet: %s: %w", out, err)
+func (config *TestConfig) CheckFlannelTraefikDeploymentsAndDaemonSets() error {
+	if out, err := config.Server.RunKubectl("-n kube-system rollout status daemonset/kube-flannel-ds --timeout=10s"); err != nil {
+		return fmt.Errorf("daemonset kube-flannel-ds not ready yet: %s: %w", out, err)
 	}
 
 	if out, err := config.Server.RunKubectl("-n kube-system rollout status daemonset/rke2-traefik --timeout=10s"); err != nil {
@@ -313,6 +334,49 @@ func (config *TestConfig) RunImageList(component string, withCVEs bool) (string,
 	}
 
 	return string(out), nil
+}
+
+func (config *TestConfig) RunImagePatch(component string, dryRun bool) (string, error) {
+	if err := config.CopyPatcherBinaryToServer(); err != nil {
+		return "", err
+	}
+
+	args := []string{"image-patch"}
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	args = append(args, "--yes")
+	args = append(args, component)
+	command := fmt.Sprintf(
+		"KUBECONFIG=/etc/rancher/rke2/rke2.yaml %s %s",
+		nodePatcherBinaryPath,
+		strings.Join(args, " "),
+	)
+
+	out, err := config.Server.RunCmdOnNode(command)
+	if err != nil {
+		return out, fmt.Errorf("image-patch failed for %s: %w", component, err)
+	}
+	return out, nil
+}
+
+// GetRunningImageTag returns the image tag for the container in workloadKind/workloadName
+// whose image path contains the given repository substring.
+func (config *TestConfig) GetRunningImageTag(namespace, workloadKind, workloadName, repository string) (string, error) {
+	kubectlArgs := fmt.Sprintf("-n %s get %s/%s -o jsonpath='{range .spec.template.spec.containers[*]}{.image} {end}'", namespace, workloadKind, workloadName)
+	out, err := config.Server.RunKubectl(kubectlArgs)
+	if err != nil {
+		return "", fmt.Errorf("failed to get images for %s/%s: %w", workloadKind, workloadName, err)
+	}
+	for _, img := range strings.Fields(out) {
+		if strings.Contains(img, repository) {
+			parts := strings.SplitN(img, ":", 2)
+			if len(parts) == 2 {
+				return parts[1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no image matching repository %q found in %s/%s: output=%q", repository, workloadKind, workloadName, out)
 }
 
 func (config *TestConfig) DumpServiceLogs(lines int) string {

@@ -11,7 +11,7 @@ import (
 	cli "github.com/urfave/cli/v2"
 )
 
-const version = "1.0.0"
+const version = "1.0.3"
 const usageExitCode = 2
 
 var clusterVersionResolver = kube.ClusterVersion
@@ -72,6 +72,7 @@ func BuildCLIApp() *cli.App {
 				ArgsUsage: "<component>",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "dry-run", Usage: "Print generated HelmChartConfig without writing"},
+					&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Automatically approve merge/apply prompts"},
 				},
 				Action: runImagePatchCommand,
 			},
@@ -179,7 +180,8 @@ func runImagePatchCommand(ctx *cli.Context) error {
 	}
 
 	options := imagePatchOptions{
-		DryRun: ctx.Bool("dry-run"),
+		DryRun:      ctx.Bool("dry-run"),
+		AutoApprove: ctx.Bool("yes"),
 	}
 
 	return runImagePatch(component, options)
@@ -205,7 +207,7 @@ func printUsage() {
 	fmt.Println("  rke2-patcher --config")
 	fmt.Println("  rke2-patcher image-cve <component>")
 	fmt.Println("  rke2-patcher image-list <component> [--with-cves] [--verbose]")
-	fmt.Println("  rke2-patcher image-patch <component> [--dry-run]")
+	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--yes|-y]")
 	fmt.Println("  rke2-patcher image-reconcile <component>")
 	fmt.Println()
 	fmt.Printf("Supported components: %s\n", strings.Join(components.Supported(), ", "))

@@ -143,6 +143,51 @@ func TestParseComparableTag(t *testing.T) {
 		}
 	})
 
+	t.Run("hardened tag", func(t *testing.T) {
+		tag, ok := parseComparableTag("v1.14.5-hardened1")
+		if !ok {
+			t.Fatalf("expected hardened tag to be parseable")
+		}
+
+		if tag.Major != 1 || tag.Minor != 14 || tag.Patch != 5 {
+			t.Fatalf("unexpected version parts: %#v", tag)
+		}
+		if tag.Build != 0 {
+			t.Fatalf("expected no build number, got %#v", tag)
+		}
+		if tag.Flavor != "hardened1" || tag.FlavorBase != "hardened" || tag.FlavorNumber != 1 {
+			t.Fatalf("unexpected hardened flavor parse: %#v", tag)
+		}
+	})
+
+	t.Run("prime tag", func(t *testing.T) {
+		tag, ok := parseComparableTag("v1.14.5-prime3")
+		if !ok {
+			t.Fatalf("expected prime tag to be parseable")
+		}
+
+		if tag.Major != 1 || tag.Minor != 14 || tag.Patch != 5 {
+			t.Fatalf("unexpected version parts: %#v", tag)
+		}
+		if tag.Build != 0 {
+			t.Fatalf("expected no build number, got %#v", tag)
+		}
+		if tag.Flavor != "prime3" || tag.FlavorBase != "prime" || tag.FlavorNumber != 3 {
+			t.Fatalf("unexpected prime flavor parse: %#v", tag)
+		}
+	})
+
+	t.Run("plain semver tag", func(t *testing.T) {
+		tag, ok := parseComparableTag("v1.40.7")
+		if !ok {
+			t.Fatalf("expected plain semver tag to be parseable")
+		}
+
+		if tag.Major != 1 || tag.Minor != 40 || tag.Patch != 7 || tag.Build != 0 {
+			t.Fatalf("unexpected parsed tag: %#v", tag)
+		}
+	})
+
 	t.Run("signature tag excluded", func(t *testing.T) {
 		if _, ok := parseComparableTag("sha256-1234.sig"); ok {
 			t.Fatalf("expected signature tag to be excluded")
@@ -195,6 +240,107 @@ func TestOrderedComparableTags(t *testing.T) {
 
 	if !reflect.DeepEqual(ordered, expected) {
 		t.Fatalf("unexpected ordered tags: %#v", ordered)
+	}
+}
+
+func TestOrderedComparableTags_HardenedSuffixes(t *testing.T) {
+	tags := []registry.Tag{
+		{Name: "v1.14.5-hardened1"},
+		{Name: "v1.14.5-hardened10"},
+		{Name: "v1.14.5-hardened2"},
+		{Name: "v1.14.4-hardened3"},
+	}
+
+	ordered := orderedComparableTags(tags)
+	expected := []string{
+		"v1.14.5-hardened10",
+		"v1.14.5-hardened2",
+		"v1.14.5-hardened1",
+		"v1.14.4-hardened3",
+	}
+
+	if !reflect.DeepEqual(ordered, expected) {
+		t.Fatalf("unexpected ordered tags: %#v", ordered)
+	}
+}
+
+func TestOrderedComparableTags_PrimeSuffixes(t *testing.T) {
+	tags := []registry.Tag{
+		{Name: "v1.14.5-prime1"},
+		{Name: "v1.14.5-prime10"},
+		{Name: "v1.14.5-prime3"},
+		{Name: "v1.14.4-prime9"},
+	}
+
+	ordered := orderedComparableTags(tags)
+	expected := []string{
+		"v1.14.5-prime10",
+		"v1.14.5-prime3",
+		"v1.14.5-prime1",
+		"v1.14.4-prime9",
+	}
+
+	if !reflect.DeepEqual(ordered, expected) {
+		t.Fatalf("unexpected ordered tags: %#v", ordered)
+	}
+}
+
+func TestSelectTagsForCVEListing_HardenedTags(t *testing.T) {
+	tags := []registry.Tag{
+		{Name: "v1.14.4-hardened2"},
+		{Name: "v1.14.5-hardened1"},
+		{Name: "v1.14.5-hardened2"},
+	}
+
+	ordered, previous := selectTagsForCVEListing(tags, "v1.14.5-hardened1")
+	expectedOrdered := []string{
+		"v1.14.5-hardened2",
+		"v1.14.5-hardened1",
+		"v1.14.4-hardened2",
+	}
+
+	if !reflect.DeepEqual(ordered, expectedOrdered) {
+		t.Fatalf("unexpected ordered tags: %#v", ordered)
+	}
+
+	if previous != "v1.14.4-hardened2" {
+		t.Fatalf("unexpected previous tag: %q", previous)
+	}
+}
+
+func TestResolvePatchTargetTag_AllowsHardenedUpgrade(t *testing.T) {
+	repository := "rancher/nginx-ingress-controller"
+	server := newTagsServer(t, repository, []string{
+		"v1.14.5-hardened1",
+		"v1.14.5-hardened2",
+	})
+	t.Setenv("RKE2_PATCHER_REGISTRY", server.URL)
+
+	targetTag, err := resolvePatchTargetTag(repository, "v1.14.5-hardened1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if targetTag != "v1.14.5-hardened2" {
+		t.Fatalf("unexpected target tag: %q", targetTag)
+	}
+}
+
+func TestResolvePatchTargetTag_AllowsPrimeUpgrade(t *testing.T) {
+	repository := "rancher/nginx-ingress-controller"
+	server := newTagsServer(t, repository, []string{
+		"v1.14.5-prime3",
+		"v1.14.5-prime4",
+	})
+	t.Setenv("RKE2_PATCHER_REGISTRY", server.URL)
+
+	targetTag, err := resolvePatchTargetTag(repository, "v1.14.5-prime3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if targetTag != "v1.14.5-prime4" {
+		t.Fatalf("unexpected target tag: %q", targetTag)
 	}
 }
 
