@@ -228,7 +228,7 @@ func TestRunReconcile_DoesNotRemoveStateWhenFileIsMissing(t *testing.T) {
 		t.Fatalf("failed to persist traefik state: %v", err)
 	}
 
-	if err := runReconcile(traefikComponent); err != nil {
+	if err := runReconcile(traefikComponent, false); err != nil {
 		t.Fatalf("unexpected reconcile error: %v", err)
 	}
 
@@ -330,7 +330,7 @@ spec:
 		t.Fatalf("failed to persist flannel state: %v", err)
 	}
 
-	if err := runReconcile(traefikComponent); err != nil {
+	if err := runReconcile(traefikComponent, false); err != nil {
 		t.Fatalf("unexpected reconcile error: %v", err)
 	}
 
@@ -445,7 +445,7 @@ spec:
 		t.Fatalf("failed to persist traefik state: %v", err)
 	}
 
-	if err := runReconcile(traefikComponent); err != nil {
+	if err := runReconcile(traefikComponent, false); err != nil {
 		t.Fatalf("unexpected reconcile error: %v", err)
 	}
 
@@ -529,7 +529,7 @@ spec:
 		t.Fatalf("failed to persist traefik state: %v", err)
 	}
 
-	if err := runReconcile(traefikComponent); err != nil {
+	if err := runReconcile(traefikComponent, false); err != nil {
 		t.Fatalf("unexpected reconcile error: %v", err)
 	}
 

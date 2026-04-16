@@ -264,7 +264,7 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 	return nil
 }
 
-func runReconcile(component components.Component) error {
+func runReconcile(component components.Component, autoApprove bool) error {
 	currentVersion, err := clusterVersionResolver()
 	if err != nil {
 		return fmt.Errorf("failed to resolve cluster version: %w", err)
@@ -297,9 +297,14 @@ func runReconcile(component components.Component) error {
 		}
 
 		prompt := fmt.Sprintf("image-reconcile: component %s: no stale patches found; already up to date. Would you like to revert the patch? [Yes/No]: ", componentName)
-		approved, err := promptYesNoFn(prompt)
-		if err != nil {
-			return err
+		var approved bool
+		if autoApprove {
+			approved = true
+		} else {
+			approved, err = promptYesNoFn(prompt)
+			if err != nil {
+				return err
+			}
 		}
 		if !approved {
 			return nil

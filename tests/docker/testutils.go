@@ -230,6 +230,35 @@ func (config *TestConfig) CheckDefaultDeploymentsAndDaemonSets() error {
 	return nil
 }
 
+func (config *TestConfig) CheckDefaultAndTraefikDeploymentsAndDaemonSets() error {
+	deployments := []string{
+		"rke2-coredns-rke2-coredns",
+		"rke2-coredns-rke2-coredns-autoscaler",
+		"rke2-metrics-server",
+		"rke2-snapshot-controller",
+	}
+	daemonsets := []string{
+		"rke2-canal",
+		"rke2-traefik",
+	}
+
+	for _, deployment := range deployments {
+		cmd := fmt.Sprintf("-n kube-system rollout status deployment/%s --timeout=10s", deployment)
+		if out, err := config.Server.RunKubectl(cmd); err != nil {
+			return fmt.Errorf("deployment %s not ready yet: %s: %w", deployment, out, err)
+		}
+	}
+
+	for _, daemonset := range daemonsets {
+		cmd := fmt.Sprintf("-n kube-system rollout status daemonset/%s --timeout=10s", daemonset)
+		if out, err := config.Server.RunKubectl(cmd); err != nil {
+			return fmt.Errorf("daemonset %s not ready yet: %s: %w", daemonset, out, err)
+		}
+	}
+
+	return nil
+}
+
 func (config *TestConfig) CheckFlannelTraefikDeploymentsAndDaemonSets() error {
 	if out, err := config.Server.RunKubectl("-n kube-system rollout status daemonset/kube-flannel-ds --timeout=10s"); err != nil {
 		return fmt.Errorf("daemonset kube-flannel-ds not ready yet: %s: %w", out, err)
@@ -356,6 +385,30 @@ func (config *TestConfig) RunImagePatch(component string, dryRun bool) (string, 
 	out, err := config.Server.RunCmdOnNode(command)
 	if err != nil {
 		return out, fmt.Errorf("image-patch failed for %s: %w", component, err)
+	}
+	return out, nil
+}
+
+func (config *TestConfig) RunImageReconcile(component string, dryRun bool) (string, error) {
+	if err := config.CopyPatcherBinaryToServer(); err != nil {
+		return "", err
+	}
+
+	args := []string{"image-reconcile"}
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	args = append(args, "--yes")
+	args = append(args, component)
+	command := fmt.Sprintf(
+		"KUBECONFIG=/etc/rancher/rke2/rke2.yaml %s %s",
+		nodePatcherBinaryPath,
+		strings.Join(args, " "),
+	)
+
+	out, err := config.Server.RunCmdOnNode(command)
+	if err != nil {
+		return out, fmt.Errorf("image-reconcile failed for %s: %w", component, err)
 	}
 	return out, nil
 }

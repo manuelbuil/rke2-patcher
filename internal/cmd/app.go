@@ -80,7 +80,10 @@ func BuildCLIApp() *cli.App {
 				Name:      "image-reconcile",
 				Usage:     "Reconcile stale patches or revert current patch for a component",
 				ArgsUsage: "<component>",
-				Action:    runReconcileCommand,
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Automatically approve merge/apply prompts"},
+				},
+				Action: runReconcileCommand,
 			},
 		},
 	}
@@ -197,7 +200,8 @@ func runReconcileCommand(ctx *cli.Context) error {
 		return err
 	}
 
-	return runReconcile(component)
+	autoApprove := ctx.Bool("yes")
+	return runReconcile(component, autoApprove)
 }
 
 // printUsage prints a help menu describing how the tool must be used
@@ -208,7 +212,7 @@ func printUsage() {
 	fmt.Println("  rke2-patcher image-cve <component>")
 	fmt.Println("  rke2-patcher image-list <component> [--with-cves] [--verbose]")
 	fmt.Println("  rke2-patcher image-patch <component> [--dry-run] [--yes|-y]")
-	fmt.Println("  rke2-patcher image-reconcile <component>")
+	fmt.Println("  rke2-patcher image-reconcile <component> [--yes|-y]")
 	fmt.Println()
 	fmt.Printf("Supported components: %s\n", strings.Join(components.Supported(), ", "))
 	fmt.Println()

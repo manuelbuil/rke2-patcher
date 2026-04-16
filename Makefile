@@ -29,13 +29,17 @@ image-patch: build
 	./$(BINARY) image-patch $(COMPONENT)
 
 test-docker-image-cve: build
-	go test -v -timeout=80m ./tests/docker/default_components/default_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+	go test -v -timeout=80m ./tests/docker/image_cve/image_cve_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
 test-docker-image-list: build
-	go test -v -timeout=80m ./tests/docker/flannel_traefik/flannel_traefik_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+	go test -v -timeout=80m ./tests/docker/image_list/image_list_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
 test-docker-image-patcher: build
 	go test -v -timeout=80m ./tests/docker/patch_components/patch_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
 test-docker-image-patcher-traefik-flannel: build
-	go test -v -timeout=80m ./tests/docker/flannel_traefik_patch_components/traefik_flannel_patch_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+	go test -v -timeout=80m ./tests/docker/flannel_traefik_patch_components/flannel_traefik_patch_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+
+test-reconcile: build
+	go test -v -timeout=80m ./tests/docker/reconcile/reconcile_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+
