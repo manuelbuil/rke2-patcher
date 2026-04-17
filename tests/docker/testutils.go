@@ -146,10 +146,15 @@ func (config *TestConfig) ProvisionServer() error {
 		return fmt.Errorf("failed to install rke2 server: %s: %w", out, err)
 	}
 
-	if strings.TrimSpace(config.ServerConfig) != "" {
-		if err := config.writeServerConfig(config.ServerConfig); err != nil {
-			return err
-		}
+	// Always set prime: true, and append any extra config provided by the test
+	extraConfig := strings.TrimSpace(config.ServerConfig)
+	mergedConfig := "prime: true\n"
+	if extraConfig != "" {
+	    mergedConfig += "\n" + extraConfig + "\n"
+	}
+
+	if err := config.writeServerConfig(mergedConfig); err != nil {
+		return err
 	}
 
 	if out, err := config.Server.RunCmdOnNode("systemctl enable --now rke2-server"); err != nil {
