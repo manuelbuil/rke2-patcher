@@ -17,7 +17,7 @@ const (
 	expectedCoreDNSClusterAutoscalerTag = "v1.10.3-build20260414"
 	expectedMetricsServerTag            = "v0.8.1-build20260328"
 	expectedSnapshotControllerTag       = "v8.5.0-build20260410" // note: this tag won't be applied since the patch is expected to be rejected, but we include it here to ensure that if the patch is erroneously accepted, we'll know because the tag will be updated
-	expectedIngressNginxTag             = "v1.14.5-hardened2"
+	expectedIngressNginxTag             = "v1.14.5-prime3"
 
 	rolloutTimeout = 3 * time.Minute
 )

@@ -400,7 +400,7 @@ func renderValuesContent(componentName string, chartName string, imageName strin
 		return fmt.Sprintf(`    controller: # change made by rke2-patcher
       image: # change made by rke2-patcher
         repository: %s # change made by rke2-patcher
-        tag: %s # change made by rke2-patcher`, imageName, imageTag)
+        primeTag: %s # change made by rke2-patcher`, imageName, imageTag)
 	}
 
 	if strings.EqualFold(componentName, "rke2-canal-calico") {
