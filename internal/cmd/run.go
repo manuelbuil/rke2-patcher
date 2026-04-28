@@ -189,13 +189,13 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return err
 	}
 
-	filePath, generatedContent, generatedValuesContent := patcher.BuildHelmChartConfig(component.Name, component.HelmChartConfigName, currentImageName, targetTagName)
+	_, generatedContent, generatedValuesContent := patcher.BuildHelmChartConfig(component.Name, component.HelmChartConfigName, currentImageName, targetTagName)
 	if options.DryRun {
-		printPatchPreview(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, filePath, generatedContent)
+		printPatchPreview(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, generatedContent)
 		return nil
 	}
 
-	stateWrite, err := generateStateWrite(component.Name, currentImageTag, targetTagName, filePath, generatedValuesContent)
+	stateWrite, err := generateStateWrite(component.Name, currentImageTag, targetTagName, generatedValuesContent)
 	if err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		}
 		contentToWrite = mergedContent
 
-		printPatchPreview(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, filePath, contentToWrite)
+		printPatchPreview(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, contentToWrite)
 		if !options.AutoApprove {
 			secondConfirm, err := promptYesNoFn("Apply this HelmChartConfig now? [Yes/No]: ")
 			if err != nil {
@@ -257,28 +257,15 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		}
 	}
 
-	if err := ensureManifestsDirectoryExists(filePath); err != nil {
-		return err
+	if err := kube.ApplyHelmChartConfig(contentToWrite); err != nil {
+		return fmt.Errorf("failed to apply HelmChartConfig to cluster: %w", err)
 	}
 
-	writeTime := time.Now()
-	if err := patcher.WriteHelmChartConfigContent(filePath, contentToWrite); err != nil {
-		return err
-	}
-
-	// Verify the file was actually written: it must exist and its modification
-	// time must be >= the moment we called Write, ruling out a stale pre-existing
-	// file that was untouched due to a silent failure.
-	if err := verifyFileWritten(filePath, writeTime); err != nil {
-		return fmt.Errorf("file verification failed after write: %w", err)
-	}
-
-	// Persist patch-limit state only after the file is confirmed on disk.
 	if err := persistPatchDecision(stateWrite); err != nil {
 		return fmt.Errorf("failed to persist patch-limit state: %w", err)
 	}
 
-	printPatchApplied(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, filePath)
+	printPatchApplied(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName)
 	return nil
 }
 
@@ -388,36 +375,35 @@ func verifyFileWritten(filePath string, writeTime time.Time) error {
 
 // reconcileEntry removes the patcher values from the HelmChartConfig file specified in the entry
 func reconcileEntry(entry patchEntry) (bool, error) {
-	filePath := strings.TrimSpace(entry.FilePath)
-	if filePath == "" {
-		return false, nil
-	}
-
 	generatedValuesContent := strings.TrimSpace(entry.GeneratedValuesContent)
 	if generatedValuesContent == "" {
 		return false, nil
 	}
 
-	existingContent, err := os.ReadFile(filePath)
+	configs, err := kube.ListHelmChartConfigsByIdentity(entry.Component, "kube-system")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to read HelmChartConfig file %q: %w", filePath, err)
+		return false, fmt.Errorf("failed to list HelmChartConfig for reconciliation: %w", err)
+	}
+	if len(configs) == 0 {
+		return false, nil // nothing to reconcile
 	}
 
-	updatedContent, err := patcher.SubtractPatcherValuesContent(string(existingContent), generatedValuesContent)
+	// Use the first found config
+	existingContent := strings.TrimSpace(configs[0].Content)
+	if existingContent == "" {
+		return false, nil
+	}
+
+	updatedContent, err := patcher.SubtractPatcherValuesContent(existingContent, generatedValuesContent)
 	if err != nil {
-		return false, fmt.Errorf("failed to strip patcher values from %q: %w", filePath, err)
+	    return false, fmt.Errorf("failed to strip patcher values: %w", err)
 	}
 
-	writeTime := time.Now()
-	if err := patcher.WriteHelmChartConfigContent(filePath, updatedContent); err != nil {
-		return false, fmt.Errorf("failed to write updated HelmChartConfig to %q: %w", filePath, err)
-	}
+	// DEBUG: Print the manifest being applied
+	fmt.Printf("\n[DEBUG] Applying reconciled HelmChartConfig manifest for %s:\n---\n%s---\n", entry.Component, updatedContent)
 
-	if err := verifyFileWritten(filePath, writeTime); err != nil {
-		return false, fmt.Errorf("failed to verify reconciled HelmChartConfig %q: %w", filePath, err)
+	if err := kube.ApplyHelmChartConfig(updatedContent); err != nil {
+		return false, fmt.Errorf("failed to apply reconciled HelmChartConfig: %w", err)
 	}
 
 	return true, nil

@@ -341,6 +341,10 @@ func SubtractPatcherValuesContent(existingFileContent, generatedValuesContent st
 		return "", fmt.Errorf("failed setting updated HelmChartConfig spec: %w", err)
 	}
 
+	// Ensure correct casing for apiVersion and kind
+	updatedDoc.SetAPIVersion("helm.cattle.io/v1")
+	updatedDoc.SetKind("HelmChartConfig")
+
 	result, err := yaml.Marshal(updatedDoc.Object)
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize updated HelmChartConfig: %w", err)

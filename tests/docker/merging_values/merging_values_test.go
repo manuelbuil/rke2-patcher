@@ -53,30 +53,31 @@ var _ = Describe("Default components image-patch", Ordered, func() {
 		})
 	})
 
-	// ── Batch 1: rke2-flannel + rke2-traefik ──────────
-	Context("Batch 1: rke2-flannel + rke2-traefik", func() {
-		It("patches rke2-flannel and rke2-traefik", func() {
-			output, err := tc.RunImagePatch("rke2-flannel", false)
-			Expect(err).NotTo(HaveOccurred(), output)
+	// ── Create a HelmChartConfig for rke2-traefik ───────
+	Context("Create HelmChartConfig for rke2-traefik", func() {
+		It("creates a HelmChartConfig for rke2-traefik with the same image tag as the default", func() {
+			err := tc.CreateTraefikCorednsHelmChartConfig()
+			Expect(err).NotTo(HaveOccurred())
 
-			output, err = tc.RunImagePatch("rke2-traefik", false)
-			Expect(err).NotTo(HaveOccurred(), output)
+			Eventually(func(g Gomega) {
+				g.Expect(tc.CheckNodeLocalDNS()).To(Succeed())
+			}, "200s", "5s").Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				g.Expect(tc.CheckTraefikGwAPI()).To(Succeed())
+			}, "200s", "5s").Should(Succeed())
 		})
+	})
 
-		It("waits for daemonset rke2-flannel to roll out", func() {
-			Expect(tc.WaitForDaemonSetReady("kube-system", "kube-flannel-ds", rolloutTimeout)).To(Succeed())
+	// ── Patch rke2-traefik ──────────
+	Context("Patch: rke2-traefik", func() {
+		It("patches rke2-traefik", func() {
+			output, err := tc.RunImagePatch("rke2-traefik", false)
+			Expect(err).NotTo(HaveOccurred(), output)
 		})
 
 		It("waits for daemonset rke2-traefik to roll out", func() {
 			Expect(tc.WaitForDaemonSetReady("kube-system", "rke2-traefik", rolloutTimeout)).To(Succeed())
-		})
-
-		It("verifies rke2-flannel image tag", func() {
-			Eventually(func(g Gomega) {
-				tag, err := tc.GetRunningImageTag("kube-system", "daemonset", "kube-flannel-ds", "rancher/hardened-flannel")
-				Expect(err).NotTo(HaveOccurred())
-				g.Expect(tag).To(Equal(expectedFlannelTag))
-			}, "60s", "5s").Should(Succeed())
 		})
 
 		It("verifies rke2-traefik image tag", func() {
@@ -87,6 +88,20 @@ var _ = Describe("Default components image-patch", Ordered, func() {
 			}, "60s", "5s").Should(Succeed())
 		})
 	})
+
+	// ── Verifies the previous config still exists ───────
+	Context("Verify previous HelmChartConfig for rke2-traefik", func() {
+		It("verifies the previous HelmChartConfig for rke2-traefik still exists with the same image tag as the default", func() {
+			Eventually(func(g Gomega) {
+				g.Expect(tc.CheckNodeLocalDNS()).To(Succeed())
+			}, "200s", "5s").Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				g.Expect(tc.CheckTraefikGwAPI()).To(Succeed())
+			}, "200s", "5s").Should(Succeed())
+		})
+	})
+
 })
 
 var failed bool

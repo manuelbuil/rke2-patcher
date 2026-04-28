@@ -447,7 +447,7 @@ func TestEvaluatePatchEligibility_OnlyOneForwardPatchPerComponentAndClusterVersi
 		clusterVersionResolver = originalClusterVersionResolver
 	})
 
-	decision, err := generateStateWrite("rke2-traefik", "v3.6.7-build20260301", "v3.6.8-build20260302", "", "")
+	decision, err := generateStateWrite("rke2-traefik", "v3.6.7-build20260301", "v3.6.8-build20260302", "")
 	if err != nil {
 		t.Fatalf("unexpected error during first patch evaluation: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestEvaluatePatchEligibility_OnlyOneForwardPatchPerComponentAndClusterVersi
 		t.Fatalf("unexpected persistence error: %v", err)
 	}
 
-	_, err = generateStateWrite("rke2-traefik", "v3.6.8-build20260302", "v3.6.9-build20260303", "", "")
+	_, err = generateStateWrite("rke2-traefik", "v3.6.8-build20260302", "v3.6.9-build20260303", "")
 	if err == nil {
 		t.Fatalf("expected second forward patch to be rejected")
 	}
@@ -482,7 +482,7 @@ func TestEvaluatePatchEligibility_RequiresReconcileAfterRKE2Upgrade(t *testing.T
 		clusterVersionResolver = originalClusterVersionResolver
 	})
 
-	firstDecision, err := generateStateWrite("rke2-traefik", "v3.6.7-build20260301", "v3.6.8-build20260302", "", "")
+	firstDecision, err := generateStateWrite("rke2-traefik", "v3.6.7-build20260301", "v3.6.8-build20260302", "")
 	if err != nil {
 		t.Fatalf("unexpected first patch evaluation error: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestEvaluatePatchEligibility_RequiresReconcileAfterRKE2Upgrade(t *testing.T
 	}
 
 	clusterVersion = "v1.36.0+rke2r1"
-	_, err = generateStateWrite("rke2-traefik", "v3.6.8-build20260302", "v3.6.9-build20260303", "", "")
+	_, err = generateStateWrite("rke2-traefik", "v3.6.8-build20260302", "v3.6.9-build20260303", "")
 	if err == nil {
 		t.Fatalf("expected patch to be blocked until reconcile after cluster version change")
 	}

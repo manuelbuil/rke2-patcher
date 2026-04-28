@@ -79,7 +79,7 @@ var _ = Describe("Default components image-patch", Ordered, func() {
 		It("patches rke2-canal-calico and merges with existing flannel patch", func() {
 			output, err := tc.RunImagePatch("rke2-canal-calico", false)
 			Expect(err).NotTo(HaveOccurred(), output)
-			Expect(output).To(ContainSubstring("wrote HelmChartConfig: /var/lib/rancher/rke2/server/manifests/rke2-canal-config-rke2-patcher.yaml"))
+			Expect(output).To(ContainSubstring("applied HelmChartConfig"))
 		})
 
 		It("verifies rke2-canal-calico image tag", func() {
@@ -118,7 +118,7 @@ var _ = Describe("Default components image-patch", Ordered, func() {
 		It("patches rke2-coredns", func() {
 			output, err := tc.RunImagePatch("rke2-coredns-cluster-autoscaler", false)
 			Expect(err).NotTo(HaveOccurred(), output)
-			Expect(output).To(ContainSubstring("wrote HelmChartConfig: /var/lib/rancher/rke2/server/manifests/rke2-coredns-config-rke2-patcher.yaml"))
+			Expect(output).To(ContainSubstring("applied HelmChartConfig"))
 
 		})
 

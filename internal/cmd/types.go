@@ -24,7 +24,6 @@ type patchEntry struct {
 	ClusterVersion         string `json:"clusterVersion"`
 	BaselineTag            string `json:"baselineTag"`
 	PatchedToTag           string `json:"patchedToTag"`
-	FilePath               string `json:"filePath,omitempty"`
 	GeneratedValuesContent string `json:"generatedValuesContent,omitempty"`
 }
 

@@ -26,23 +26,23 @@ func printImageListWithCVEs(component components.Component, tagsToScan []string,
 	}
 }
 
-func printPatchPreview(componentName, runningImage, currentTag, targetTag, filePath, content string) {
+func printPatchPreview(componentName, runningImage, currentTag, targetTag, content string) {
 	fmt.Printf("component: %s\n", componentName)
 	fmt.Printf("current image: %s\n", runningImage)
 	fmt.Printf("current tag: %s\n", currentTag)
 	fmt.Printf("new tag: %s\n", targetTag)
 	fmt.Printf("dry-run: true\n")
-	fmt.Printf("would write HelmChartConfig: %s\n", filePath)
+	fmt.Printf("would apply HelmChartConfig\n")
 	fmt.Println("---")
 	fmt.Print(content)
 }
 
-func printPatchApplied(componentName, runningImage, currentTag, targetTag, filePath string) {
+func printPatchApplied(componentName, runningImage, currentTag, targetTag string) {
 	fmt.Printf("component: %s\n", componentName)
 	fmt.Printf("current image: %s\n", runningImage)
 	fmt.Printf("current tag: %s\n", currentTag)
 	fmt.Printf("new tag: %s\n", targetTag)
-	fmt.Printf("wrote HelmChartConfig: %s\n", filePath)
+	fmt.Printf("applied HelmChartConfig\n")
 }
 
 func renderCVESummary(entry cveListEntry, verbose bool) (string, string) {

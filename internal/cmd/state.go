@@ -24,7 +24,7 @@ var (
 )
 
 // generateStateWrite creates a patchStateWrite object representing the intent to patch a component from currentTag to targetTag
-func generateStateWrite(componentName string, currentTag string, targetTag string, filePath string, generatedValuesContent string) (patchStateWrite, error) {
+func generateStateWrite(componentName string, currentTag string, targetTag string, generatedValuesContent string) (patchStateWrite, error) {
 	clusterVersion, err := clusterVersionResolver()
 	if err != nil {
 		return patchStateWrite{}, fmt.Errorf("failed to resolve cluster version for patch eligibility check: %w", err)
@@ -53,7 +53,6 @@ func generateStateWrite(componentName string, currentTag string, targetTag strin
 		ClusterVersion:         clusterVersion,
 		BaselineTag:            currentTag,
 		PatchedToTag:           targetTag,
-		FilePath:               filePath,
 		GeneratedValuesContent: generatedValuesContent,
 	}
 

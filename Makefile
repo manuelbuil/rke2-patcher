@@ -40,11 +40,14 @@ test-docker-image-patcher: build
 test-docker-image-patcher-traefik-flannel: build
 	go test -v -timeout=80m ./tests/docker/flannel_traefik_patch_components/flannel_traefik_patch_components_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
-test-reconcile: build
+test-docker-reconcile: build
 	go test -v -timeout=80m ./tests/docker/reconcile/reconcile_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
 test-docker-image-cve-local: build
 	go test -v -timeout=80m ./tests/docker/image_cve_local/image_cve_local_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+
+test-docker-merging-values: build
+	go test -v -timeout=80m ./tests/docker/merging_values/merging_values_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
 VERSION ?= $(shell grep '^const version' internal/cmd/app.go | cut -d '"' -f2)
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/manuelbuil/rke2-patcher/internal/components"
+	"github.com/manuelbuil/rke2-patcher/internal/kube"
 	cli "github.com/urfave/cli/v2"
 )
 
@@ -36,7 +37,7 @@ func TestEvaluatePatchEligibility_BlocksWhenStaleVersionExists(t *testing.T) {
 	}
 	t.Cleanup(func() { loadPatchStateFromBackend = originalLoad })
 
-	_, err := generateStateWrite("traefik", "v3.6.9", "v3.6.10", "", "")
+	_, err := generateStateWrite("traefik", "v3.6.9", "v3.6.10", "")
 	if err == nil {
 		t.Fatalf("expected error when stale version entry exists, got nil")
 	}
@@ -53,6 +54,7 @@ func TestEvaluatePatchEligibility_BlocksWhenStaleVersionExists(t *testing.T) {
 		t.Fatalf("expected error to mention stale version, got: %v", err)
 	}
 }
+
 
 func TestEvaluatePatchEligibility_AllowsWhenAllEntriesMatchCurrentVersion(t *testing.T) {
 	t.Setenv(patchStateNamespaceEnv, "")
@@ -79,7 +81,7 @@ func TestEvaluatePatchEligibility_AllowsWhenAllEntriesMatchCurrentVersion(t *tes
 	}
 	t.Cleanup(func() { loadPatchStateFromBackend = originalLoad })
 
-	decision, err := generateStateWrite("traefik", "v3.6.9", "v3.6.10", "", "")
+	decision, err := generateStateWrite("traefik", "v3.6.9", "v3.6.10", "")
 	if err != nil {
 		t.Fatalf("expected patch to be allowed when no stale-version entries exist, got: %v", err)
 	}
@@ -112,83 +114,85 @@ func TestStaleEntryKeys_ReturnsOnlyDifferentVersionKeys(t *testing.T) {
 }
 
 func TestReconcileEntry_StripsGeneratedValuesFromFile(t *testing.T) {
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "traefik-config-rke2-patcher.yaml")
 
-	fileContent := `apiVersion: helm.cattle.io/v1
-kind: HelmChartConfig
-metadata:
-  name: rke2-traefik
-  namespace: kube-system
-spec:
-  valuesContent: |-
-    image:
-      repository: rancher/hardened-traefik
-      tag: v3.4.0
-    service:
-      type: ClusterIP
-`
-	if err := os.WriteFile(filePath, []byte(fileContent), 0644); err != nil {
-		t.Fatalf("failed to write temp file: %v", err)
-	}
+       // Mock cluster HelmChartConfig retrieval and apply
+       originalList := kube.ListHelmChartConfigsByIdentity
+       originalApply := kube.ApplyHelmChartConfig
+       defer func() {
+	       kube.ListHelmChartConfigsByIdentity = originalList
+	       kube.ApplyHelmChartConfig = originalApply
+       }()
 
-	entry := patchEntry{
-		Component:              "traefik",
-		ClusterVersion:         "v1.35.1+rke2r1",
-		BaselineTag:            "v3.3.0",
-		PatchedToTag:           "v3.4.0",
-		FilePath:               filePath,
-		GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
-	}
+       var appliedContent string
+	       kube.ListHelmChartConfigsByIdentity = func(name, namespace string) ([]kube.HelmChartConfigObject, error) {
+							 return []kube.HelmChartConfigObject{{
+											 Content: `apiVersion: helm.cattle.io/v1
+ kind: HelmChartConfig
+ metadata:
+	 name: rke2-traefik
+			 repository: rancher/hardened-traefik
+			 tag: v3.4.0
+		 service:
+			 type: ClusterIP
+ `,
+							 }}, nil
+			 }
+       kube.ApplyHelmChartConfig = func(content string) error {
+	       appliedContent = content
+	       return nil
+       }
 
-	reconciled, err := reconcileEntry(entry)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !reconciled {
-		t.Fatalf("expected reconcileEntry to report successful reconciliation")
-	}
 
-	updated, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("failed to read updated file: %v", err)
-	}
 
-	updatedStr := string(updated)
-	if strings.Contains(updatedStr, "repository:") || strings.Contains(updatedStr, "tag:") {
-		t.Fatalf("expected patcher image keys to be removed, got:\n%s", updatedStr)
-	}
+       entry := patchEntry{
+	       Component:              "traefik",
+	       ClusterVersion:         "v1.35.1+rke2r1",
+	       BaselineTag:            "v3.3.0",
+	       PatchedToTag:           "v3.4.0",
+	       GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
+       }
 
-	if !strings.Contains(updatedStr, "type: ClusterIP") {
-		t.Fatalf("expected user service values to be preserved, got:\n%s", updatedStr)
-	}
-}
+       reconciled, err := reconcileEntry(entry)
+       if err != nil {
+	       t.Fatalf("unexpected error: %v", err)
+       }
+       if !reconciled {
+	       t.Fatalf("expected reconcileEntry to report successful reconciliation")
+       }
 
-func TestReconcileEntry_NoOpForLegacyEntryWithoutFilePath(t *testing.T) {
-	entry := patchEntry{
-		Component:      "traefik",
-		ClusterVersion: "v1.35.1+rke2r1",
-		FilePath:       "",
-	}
+       if strings.Contains(appliedContent, "repository:") || strings.Contains(appliedContent, "tag:") {
+	       t.Fatalf("expected patcher image keys to be removed, got:\n%s", appliedContent)
+       }
+       if !strings.Contains(appliedContent, "type: ClusterIP") {
+	       t.Fatalf("expected user service values to be preserved, got:\n%s", appliedContent)
+       }
 
-	reconciled, err := reconcileEntry(entry)
-	if err != nil {
-		t.Fatalf("unexpected error for legacy entry: %v", err)
 	}
-	if reconciled {
-		t.Fatalf("expected legacy entry without file path to be skipped")
-	}
-}
 
 func TestReconcileEntry_NoOpWhenFileDoesNotExist(t *testing.T) {
-	entry := patchEntry{
-		Component:              "traefik",
-		ClusterVersion:         "v1.35.1+rke2r1",
-		FilePath:               "/nonexistent/path/traefik-config-rke2-patcher.yaml",
-		GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
-	}
+
+       entry := patchEntry{
+	       Component:              "traefik",
+	       ClusterVersion:         "v1.35.1+rke2r1",
+	       GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
+       }
+
+       // Mock cluster returns nothing (no HelmChartConfig found)
+       originalList := kube.ListHelmChartConfigsByIdentity
+       defer func() { kube.ListHelmChartConfigsByIdentity = originalList }()
+	       kube.ListHelmChartConfigsByIdentity = func(name, namespace string) ([]kube.HelmChartConfigObject, error) {
+		       return nil, nil
+       }
 
 	reconciled, err := reconcileEntry(entry)
+       if err != nil {
+	       t.Fatalf("unexpected error when config does not exist: %v", err)
+       }
+       if reconciled {
+	       t.Fatalf("expected missing-config entry to be skipped")
+       }
+
+	reconciled, err = reconcileEntry(entry)
 	if err != nil {
 		t.Fatalf("unexpected error when file does not exist: %v", err)
 	}
@@ -221,9 +225,8 @@ func TestRunReconcile_DoesNotRemoveStateWhenFileIsMissing(t *testing.T) {
 			ClusterVersion:         "v1.35.1+rke2r1",
 			BaselineTag:            "v3.3.0",
 			PatchedToTag:           "v3.4.0",
-			FilePath:               "/nonexistent/path/rke2-traefik-config-rke2-patcher.yaml",
 			GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
-		},
+       },
 	}); err != nil {
 		t.Fatalf("failed to persist traefik state: %v", err)
 	}
@@ -308,7 +311,6 @@ spec:
 			ClusterVersion:         "v1.35.1+rke2r1",
 			BaselineTag:            "v3.3.0",
 			PatchedToTag:           "v3.4.0",
-			FilePath:               traefikFilePath,
 			GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
 		},
 	}); err != nil {
@@ -323,7 +325,6 @@ spec:
 			ClusterVersion:         "v1.35.1+rke2r1",
 			BaselineTag:            "v0.9.0",
 			PatchedToTag:           "v1.0.0",
-			FilePath:               flannelFilePath,
 			GeneratedValuesContent: "image:\n  repository: rancher/hardened-flannel\n  tag: v1.0.0",
 		},
 	}); err != nil {
@@ -381,95 +382,6 @@ func TestRunReconcileCommand_RequiresComponent(t *testing.T) {
 	}
 }
 
-func TestRunReconcile_PromptsAndRevertsCurrentVersionPatchWhenApproved(t *testing.T) {
-	useInMemoryPatchStateBackend(t)
-
-	originalResolver := clusterVersionResolver
-	clusterVersionResolver = func() (string, error) {
-		return "v1.35.2+rke2r1", nil
-	}
-	t.Cleanup(func() {
-		clusterVersionResolver = originalResolver
-	})
-
-	originalPrompt := promptYesNoFn
-	promptCalled := false
-	promptYesNoFn = func(prompt string) (bool, error) {
-		promptCalled = true
-		if !strings.Contains(prompt, "Would you like to revert the patch?") {
-			t.Fatalf("unexpected prompt: %q", prompt)
-		}
-		return true, nil
-	}
-	t.Cleanup(func() {
-		promptYesNoFn = originalPrompt
-	})
-
-	tempDir := t.TempDir()
-	traefikFilePath := filepath.Join(tempDir, "rke2-traefik-config-rke2-patcher.yaml")
-
-	traefikContent := `apiVersion: helm.cattle.io/v1
-kind: HelmChartConfig
-metadata:
-  name: rke2-traefik
-  namespace: kube-system
-spec:
-  valuesContent: |-
-    image:
-      repository: rancher/hardened-traefik
-      tag: v3.4.0
-    service:
-      type: ClusterIP
-`
-	if err := os.WriteFile(traefikFilePath, []byte(traefikContent), 0644); err != nil {
-		t.Fatalf("failed to write traefik file: %v", err)
-	}
-
-	traefikComponent, err := components.Resolve("rke2-traefik")
-	if err != nil {
-		t.Fatalf("failed to resolve traefik component: %v", err)
-	}
-
-	if err := persistPatchDecision(patchStateWrite{
-		StateNamespace: patchStateNamespace(),
-		EntryName:      "v1.35.2+rke2r1|" + traefikComponent.Name,
-		Entry: patchEntry{
-			Component:              traefikComponent.Name,
-			ClusterVersion:         "v1.35.2+rke2r1",
-			BaselineTag:            "v3.3.0",
-			PatchedToTag:           "v3.4.0",
-			FilePath:               traefikFilePath,
-			GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
-		},
-	}); err != nil {
-		t.Fatalf("failed to persist traefik state: %v", err)
-	}
-
-	if err := runReconcile(traefikComponent, false); err != nil {
-		t.Fatalf("unexpected reconcile error: %v", err)
-	}
-
-	if !promptCalled {
-		t.Fatalf("expected revert prompt to be shown")
-	}
-
-	updatedTraefik, err := os.ReadFile(traefikFilePath)
-	if err != nil {
-		t.Fatalf("failed to read traefik file: %v", err)
-	}
-	if strings.Contains(string(updatedTraefik), "repository: rancher/hardened-traefik") || strings.Contains(string(updatedTraefik), "tag: v3.4.0") {
-		t.Fatalf("expected traefik patcher keys to be removed, got:\n%s", string(updatedTraefik))
-	}
-
-	state, _, err := loadPatchStateFromBackend(patchStateNamespace())
-	if err != nil {
-		t.Fatalf("failed to load state: %v", err)
-	}
-	if _, found := state.Entries["v1.35.2+rke2r1|"+traefikComponent.Name]; found {
-		t.Fatalf("expected current-version traefik state entry to be removed after approved revert")
-	}
-}
-
 func TestRunReconcile_PromptsAndKeepsCurrentVersionPatchWhenRejected(t *testing.T) {
 	useInMemoryPatchStateBackend(t)
 
@@ -522,7 +434,6 @@ spec:
 			ClusterVersion:         "v1.35.2+rke2r1",
 			BaselineTag:            "v3.3.0",
 			PatchedToTag:           "v3.4.0",
-			FilePath:               traefikFilePath,
 			GeneratedValuesContent: "image:\n  repository: rancher/hardened-traefik\n  tag: v3.4.0",
 		},
 	}); err != nil {

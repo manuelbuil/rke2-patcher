@@ -150,7 +150,7 @@ func (config *TestConfig) ProvisionServer() error {
 	extraConfig := strings.TrimSpace(config.ServerConfig)
 	mergedConfig := "prime: true\n"
 	if extraConfig != "" {
-	    mergedConfig += "\n" + extraConfig + "\n"
+		mergedConfig += "\n" + extraConfig + "\n"
 	}
 
 	if err := config.writeServerConfig(mergedConfig); err != nil {
@@ -292,6 +292,53 @@ func (config *TestConfig) CheckFlannelTraefikDeploymentsAndDaemonSets() error {
 	return nil
 }
 
+// CheckNodeLocalDNS verifies that the node-local-dns DaemonSet is ready in kube-system namespace.
+func (config *TestConfig) CheckNodeLocalDNS() error {
+	cmd := "-n kube-system rollout status daemonset/node-local-dns --timeout=30s"
+	if out, err := config.Server.RunKubectl(cmd); err != nil {
+		return fmt.Errorf("daemonset node-local-dns not ready: %s: %w", out, err)
+	}
+	return nil
+}
+
+// CheckTraefikGwAPI verifies rke2-traefik DaemonSet is ready and logs contain 'providerName=kubernetesgateway'.
+func (config *TestConfig) CheckTraefikGwAPI() error {
+	// Check DaemonSet readiness
+	cmd := "-n kube-system rollout status daemonset/rke2-traefik --timeout=30s"
+	if out, err := config.Server.RunKubectl(cmd); err != nil {
+		return fmt.Errorf("daemonset rke2-traefik not ready: %s: %w", out, err)
+	}
+
+	// Get pod names for rke2-traefik
+	getPodsCmd := "-n kube-system get pods -l app.kubernetes.io/name=rke2-traefik -o jsonpath='{.items[*].metadata.name}'"
+	podsOut, err := config.Server.RunKubectl(getPodsCmd)
+	if err != nil {
+		return fmt.Errorf("failed to get rke2-traefik pods: %w", err)
+	}
+	pods := strings.Fields(strings.Trim(podsOut, "'\n "))
+	if len(pods) == 0 {
+		return fmt.Errorf("no rke2-traefik pods found")
+	}
+
+	// Check logs for each pod
+	found := false
+	for _, pod := range pods {
+		logCmd := fmt.Sprintf("-n kube-system logs %s", pod)
+		logs, err := config.Server.RunKubectl(logCmd)
+		if err != nil {
+			continue // try next pod
+		}
+		if strings.Contains(logs, "kubernetesgateway") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("rke2-traefik logs do not contain 'kubernetesgateway'")
+	}
+	return nil
+}
+
 func (config *TestConfig) CheckNodesReady(expectedNodes int) error {
 	out, err := config.Server.RunKubectl("get nodes --no-headers")
 	if err != nil {
@@ -349,7 +396,7 @@ func (config *TestConfig) EnsureScannerNamespace() error {
 }
 
 func (config *TestConfig) RunImageCVE(component string) (string, error) {
-  
+
 	if err := config.CopyPatcherBinaryToServer(); err != nil {
 		return "", err
 	}
@@ -555,6 +602,42 @@ func (config *TestConfig) writeServerConfig(serverConfig string) error {
 	cmd := fmt.Sprintf("mkdir -p /etc/rancher/rke2 && echo %s | base64 -d > /etc/rancher/rke2/config.yaml", b64Config)
 	if out, err := config.Server.RunCmdOnNode(cmd); err != nil {
 		return fmt.Errorf("failed to write server config: %s: %w", out, err)
+	}
+	return nil
+}
+
+func (config *TestConfig) CreateTraefikCorednsHelmChartConfig() error {
+
+	corednsManifest := `---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    nodelocal:
+      enabled: true
+`
+	traefikManifest := `---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true
+`
+	manifests := []string{corednsManifest, traefikManifest}
+	for _, manifest := range manifests {
+		b64 := base64.StdEncoding.EncodeToString([]byte(manifest))
+		cmd := "echo " + b64 + " | base64 -d | KUBECONFIG=/etc/rancher/rke2/rke2.yaml PATH=$PATH:/var/lib/rancher/rke2/bin kubectl apply -f -"
+		if out, err := config.Server.RunCmdOnNode(cmd); err != nil {
+			return fmt.Errorf("failed to apply manifest: %s: %w", out, err)
+		}
 	}
 	return nil
 }

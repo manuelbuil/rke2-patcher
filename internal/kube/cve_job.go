@@ -64,7 +64,7 @@ var trivyVEXDownloadScriptLines = []string{
 	"  return 1",
 	"}",
 	"attempt=1",
-	"max_attempts=3",
+	"max_attempts=5",
 	"while [ \"${attempt}\" -le \"${max_attempts}\" ]; do",
 	"  if download_vex; then",
 	"    break",

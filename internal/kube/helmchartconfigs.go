@@ -52,8 +52,10 @@ func kubeDynamicClient() (dynamic.Interface, error) {
 	return dynamicClient, nil
 }
 
-// ListHelmChartConfigsByIdentity lists HelmChartConfig objects in the cluster that match the given name and namespace.
-func ListHelmChartConfigsByIdentity(name string, namespace string) ([]HelmChartConfigObject, error) {
+// ListHelmChartConfigsByIdentity is a variable for testability, delegates to listHelmChartConfigsByIdentityImpl.
+var ListHelmChartConfigsByIdentity = listHelmChartConfigsByIdentityImpl
+
+func listHelmChartConfigsByIdentityImpl(name string, namespace string) ([]HelmChartConfigObject, error) {
 	trimmedName := strings.TrimSpace(name)
 	trimmedNamespace := strings.TrimSpace(namespace)
 	if trimmedName == "" {
@@ -120,4 +122,44 @@ func ListHelmChartConfigsByIdentity(name string, namespace string) ([]HelmChartC
 	}
 
 	return results, nil
+}
+
+// ApplyHelmChartConfig is a variable for testability, delegates to applyHelmChartConfigImpl.
+var ApplyHelmChartConfig = applyHelmChartConfigImpl
+
+func applyHelmChartConfigImpl(yamlContent string) error {
+	un := &unstructured.Unstructured{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &un.Object); err != nil {
+		return fmt.Errorf("failed to unmarshal HelmChartConfig YAML: %w", err)
+	}
+
+	gvr := schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmchartconfigs"}
+	namespace := un.GetNamespace()
+	if namespace == "" {
+		namespace = "kube-system"
+	}
+
+	dynamicClient, err := kubeDynamicClient()
+	if err != nil {
+		return err
+	}
+
+	resource := dynamicClient.Resource(gvr).Namespace(namespace)
+	name := un.GetName()
+
+	// Try to get the existing object
+	existing, err := resource.Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			// Create if not found
+			_, err = resource.Create(context.Background(), un, metav1.CreateOptions{})
+			return err
+		}
+		return err
+	}
+
+	// Update if found
+	un.SetResourceVersion(existing.GetResourceVersion())
+	_, err = resource.Update(context.Background(), un, metav1.UpdateOptions{})
+	return err
 }
