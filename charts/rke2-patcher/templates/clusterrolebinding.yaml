@@ -9,4 +9,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: rke2-patcher
-    namespace: default
+    namespace: rke2-patcher

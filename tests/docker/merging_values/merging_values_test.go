@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	expectedFlannelTag = "v0.28.2-build20260414"
 	expectedTraefikTag = "v3.6.12-build20260409"
+	previousTraefikTag = "v3.6.10-build20260309"
 
 	rolloutTimeout = 3 * time.Minute
 )
@@ -54,8 +54,8 @@ var _ = Describe("Default components image-patch", Ordered, func() {
 	})
 
 	// ── Create a HelmChartConfig for rke2-traefik ───────
-	Context("Create HelmChartConfig for rke2-traefik", func() {
-		It("creates a HelmChartConfig for rke2-traefik with the same image tag as the default", func() {
+	Context("Create HelmChartConfig for rke2-traefik and rke2-coredns", func() {
+		It("creates a HelmChartConfig for rke2-traefik and rke2-coredns with options", func() {
 			err := tc.CreateTraefikCorednsHelmChartConfig()
 			Expect(err).NotTo(HaveOccurred())
 
@@ -96,6 +96,39 @@ var _ = Describe("Default components image-patch", Ordered, func() {
 				g.Expect(tc.CheckNodeLocalDNS()).To(Succeed())
 			}, "200s", "5s").Should(Succeed())
 
+			Eventually(func(g Gomega) {
+				g.Expect(tc.CheckTraefikGwAPI()).To(Succeed())
+			}, "200s", "5s").Should(Succeed())
+		})
+	})
+
+	Context("Reconcile rke2-traefik image", func() {
+		It("applies image-reconcile to rke2-traefik and checks image is reverted to previous", func() {
+			Expect(tc.WaitForDaemonSetReady("kube-system", "rke2-traefik", rolloutTimeout)).To(Succeed())
+			tag, err := tc.GetRunningImageTag("kube-system", "daemonset", "rke2-traefik", "rancher/hardened-traefik")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tag).To(Equal(expectedTraefikTag))
+		})
+
+		It("Applies image-reconcile to rke2-traefik", func() {
+			// Now reconcile (should revert to previous image)
+			output, err := tc.RunImageReconcile("rke2-traefik", false)
+			Expect(err).NotTo(HaveOccurred(), output)
+		})
+
+		It("waits for daemonset rke2-traefik to roll out with previous image", func() {
+			Eventually(func(g Gomega) {
+				Expect(tc.WaitForDaemonSetReady("kube-system", "rke2-traefik", rolloutTimeout)).To(Succeed())
+				tag, err := tc.GetRunningImageTag("kube-system", "daemonset", "rke2-traefik", "rancher/hardened-traefik")
+				Expect(err).NotTo(HaveOccurred())
+				g.Expect(tag).To(Equal(previousTraefikTag))
+			}, "60s", "5s").Should(Succeed())
+		})
+	})
+
+	// ── Verifies the config still exists ───────
+	Context("Verify HelmChartConfig for rke2-traefik", func() {
+		It("verifies the HelmChartConfig for rke2-traefik still exists with gatewayAPI", func() {
 			Eventually(func(g Gomega) {
 				g.Expect(tc.CheckTraefikGwAPI()).To(Succeed())
 			}, "200s", "5s").Should(Succeed())

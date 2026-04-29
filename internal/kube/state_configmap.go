@@ -29,7 +29,7 @@ func LoadStateConfigMapData(namespace string) (string, error) {
 // ConfigMap resourceVersion used for optimistic concurrency.
 // If the ConfigMap or key does not exist, it returns an empty value and no error.
 func LoadStateConfigMapDataWithResourceVersion(namespace string) (string, string, error) {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return "", "", err
 	}
@@ -53,7 +53,7 @@ func LoadStateConfigMapDataWithResourceVersion(namespace string) (string, string
 // if expectedResourceVersion still matches the current object. When expectedResourceVersion
 // is empty, it only succeeds if the ConfigMap does not yet exist.
 func SaveStateConfigMapDataWithResourceVersion(namespace string, value string, expectedResourceVersion string) error {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func SaveStateConfigMapDataWithResourceVersion(namespace string, value string, e
 
 // SaveStateConfigMapData writes key/value to the ConfigMap, creating it if it does not exist.
 func SaveStateConfigMapData(namespace string, value string) error {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return err
 	}

@@ -189,7 +189,7 @@ func runImagePatch(component components.Component, options imagePatchOptions) er
 		return err
 	}
 
-	_, generatedContent, generatedValuesContent := patcher.BuildHelmChartConfig(component.Name, component.HelmChartConfigName, currentImageName, targetTagName)
+	generatedContent, generatedValuesContent := patcher.BuildHelmChartConfig(component.Name, component.HelmChartConfigName, currentImageName, targetTagName)
 	if options.DryRun {
 		printPatchPreview(components.CLIName(component.Name), runningImage, currentImageTag, targetTagName, generatedContent)
 		return nil
@@ -380,7 +380,13 @@ func reconcileEntry(entry patchEntry) (bool, error) {
 		return false, nil
 	}
 
-	configs, err := kube.ListHelmChartConfigsByIdentity(entry.Component, "kube-system")
+	// Map known component names to actual HelmChartConfig resource names
+	resourceName := entry.Component
+	switch entry.Component {
+	case "rke2-canal-flannel":
+		resourceName = "rke2-canal"
+	}
+	configs, err := kube.ListHelmChartConfigsByIdentity(resourceName, "kube-system")
 	if err != nil {
 		return false, fmt.Errorf("failed to list HelmChartConfig for reconciliation: %w", err)
 	}
@@ -396,11 +402,8 @@ func reconcileEntry(entry patchEntry) (bool, error) {
 
 	updatedContent, err := patcher.SubtractPatcherValuesContent(existingContent, generatedValuesContent)
 	if err != nil {
-	    return false, fmt.Errorf("failed to strip patcher values: %w", err)
+		return false, fmt.Errorf("failed to strip patcher values: %w", err)
 	}
-
-	// DEBUG: Print the manifest being applied
-	fmt.Printf("\n[DEBUG] Applying reconciled HelmChartConfig manifest for %s:\n---\n%s---\n", entry.Component, updatedContent)
 
 	if err := kube.ApplyHelmChartConfig(updatedContent); err != nil {
 		return false, fmt.Errorf("failed to apply reconciled HelmChartConfig: %w", err)

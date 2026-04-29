@@ -22,7 +22,7 @@ const (
 )
 
 func DiscoverRKE2DataDirFromLocalNodeArgs() (string, error) {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return "", err
 	}

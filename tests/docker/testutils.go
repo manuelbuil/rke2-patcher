@@ -527,6 +527,15 @@ func (config *TestConfig) DumpResources() string {
 	return out
 }
 
+// GetNodeKubeletVersion returns the kubelet version of the first node as a string.
+func (config *TestConfig) GetNodeKubeletVersion() string {
+	out, err := config.Server.RunKubectl("get nodes -o jsonpath={.items[0].status.nodeInfo.kubeletVersion}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 func (config *TestConfig) Cleanup() error {
 	errs := make([]string, 0)
 
@@ -562,23 +571,18 @@ func (config *TestConfig) waitForKubeconfig(timeout time.Duration) error {
 	return fmt.Errorf("timed out waiting for /etc/rancher/rke2/rke2.yaml")
 }
 
-func (config *TestConfig) waitForNodesReady(timeout time.Duration, expectedNodes int) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-
-	for time.Now().Before(deadline) {
-		lastErr = config.CheckNodesReady(expectedNodes)
-		if lastErr == nil {
-			return nil
-		}
-		time.Sleep(5 * time.Second)
+// UpgradeRKE2Binary downloads and installs a new rke2 binary, makes it executable, and restarts the rke2-server.
+func (config *TestConfig) UpgradeRKE2Binary(upgradeURL string) error {
+	if out, err := config.Server.RunCmdOnNode("curl -L -o /usr/local/bin/rke2 " + upgradeURL); err != nil {
+		return fmt.Errorf("failed to download rke2: %s: %w", out, err)
 	}
-
-	if lastErr == nil {
-		return fmt.Errorf("timed out waiting for nodes to be ready")
+	if out, err := config.Server.RunCmdOnNode("chmod +x /usr/local/bin/rke2"); err != nil {
+		return fmt.Errorf("failed to chmod rke2: %s: %w", out, err)
 	}
-
-	return fmt.Errorf("timed out waiting for nodes to be ready: %w", lastErr)
+	if out, err := config.Server.RunCmdOnNode("systemctl restart rke2-server"); err != nil {
+		return fmt.Errorf("failed to restart rke2-server: %s: %w", out, err)
+	}
+	return nil
 }
 
 func (config *TestConfig) CopyAndModifyKubeconfig() error {
@@ -683,3 +687,5 @@ func portFree(port int) bool {
 	_ = listener.Close()
 	return true
 }
+
+

@@ -4,11 +4,14 @@ metadata:
   name: rke2-patcher
 rules:
   - apiGroups: [""]
-    resources: ["pods", "nodes", "namespaces"]
-    verbs: ["get", "list", "watch"]
+    resources: ["pods", "nodes", "namespaces", "pods/log", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "list", "watch", "delete"]
   - apiGroups: ["helm.cattle.io"]
     resources: ["helmcharts", "helmchartconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
     verbs: ["get", "list", "watch"]

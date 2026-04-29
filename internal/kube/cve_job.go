@@ -15,7 +15,6 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 const (
@@ -78,26 +77,6 @@ var trivyVEXDownloadScriptLines = []string{
 	"done",
 }
 
-func kubeClientset() (*kubernetes.Clientset, error) {
-	api, err := kubeAPIClient()
-	if err != nil {
-		return nil, err
-	}
-
-	restConfig := &rest.Config{Host: api.BaseURL}
-	authHeader := strings.TrimSpace(api.AuthHeader)
-	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-		restConfig.BearerToken = strings.TrimSpace(authHeader[len("Bearer "):])
-	}
-
-	clientset, err := kubernetes.NewForConfigAndClient(restConfig, api.Client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize kubernetes client: %w", err)
-	}
-
-	return clientset, nil
-}
-
 // ScanImageWithTrivyJob creates a Kubernetes Job to scan the given image with Trivy inside the cluster and waits for the job to complete, returning the logs of the job which contain the scan results.
 func ScanImageWithTrivyJob(image string) ([]byte, error) {
 	targetImage := strings.TrimSpace(image)
@@ -117,7 +96,7 @@ func ScanImagesWithTrivyJob(images []string, showProgress bool) ([]byte, error) 
 
 // runScanJob handles the logic of creating the scan job and waiting for its completion
 func runScanJob(targetImages []string, jobName string, progressMessage string, showProgress bool) ([]byte, error) {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +321,7 @@ func ensureNamespaceForScanJob(clientset kubernetes.Interface, namespace string)
 // EnsureNamespace checks if the given namespace exists and prompts the user to create it if it does not.
 // It is the exported counterpart of ensureNamespaceForScanJob and can be called from outside the kube package.
 func EnsureNamespace(namespace string) error {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return err
 	}

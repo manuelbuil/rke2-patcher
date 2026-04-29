@@ -20,7 +20,7 @@ type PodImageSummary struct {
 
 // ListRunningImages lists the images used by the running pods of a component (e.g. different versions during an upgrade)
 func ListRunningImages(componentWorkload components.WorkloadRef, componentRepository string) ([]PodImageSummary, error) {
-	clientset, err := kubeClientset()
+	clientset, err := ClientsetProvider()
 	if err != nil {
 		return nil, err
 	}

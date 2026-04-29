@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 type HelmChartConfigObject struct {
@@ -21,34 +23,42 @@ type HelmChartConfigObject struct {
 }
 
 type helmChartConfigItem struct {
-	APIVersion string         `json:"apiVersion"`
-	Kind       string         `json:"kind"`
-	Metadata   helmObjectMeta `json:"metadata"`
-	Spec       map[string]any `json:"spec"`
+	APIVersion string         `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string         `json:"kind" yaml:"kind"`
+	Metadata   helmObjectMeta `json:"metadata" yaml:"metadata"`
+	Spec       map[string]any `json:"spec" yaml:"spec"`
 }
 
 type helmObjectMeta struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
+	Name      string `json:"name" yaml:"name"`
+	Namespace string `json:"namespace" yaml:"namespace"`
 }
 
+// kubeDynamicClient returns a dynamic.Interface using in-cluster config if available, otherwise falls back to kubeconfig.
 func kubeDynamicClient() (dynamic.Interface, error) {
-	api, err := kubeAPIClient()
+	// Try in-cluster config
+	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, err
+		// Fallback to kubeconfig
+		kubeconfigPath := os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			kubeconfigPath = "/etc/rancher/rke2/rke2.yaml"
+		}
+		if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
+			home, homeErr := os.UserHomeDir()
+			if homeErr == nil {
+				kubeconfigPath = home + "/.kube/config"
+			}
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build kubeconfig: %w", err)
+		}
 	}
-
-	restConfig := &rest.Config{Host: api.BaseURL}
-	authHeader := strings.TrimSpace(api.AuthHeader)
-	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-		restConfig.BearerToken = strings.TrimSpace(authHeader[len("Bearer "):])
-	}
-
-	dynamicClient, err := dynamic.NewForConfigAndClient(restConfig, api.Client)
+	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize kubernetes dynamic client: %w", err)
 	}
-
 	return dynamicClient, nil
 }
 

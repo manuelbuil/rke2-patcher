@@ -49,6 +49,9 @@ test-docker-image-cve-local: build
 test-docker-merging-values: build
 	go test -v -timeout=80m ./tests/docker/merging_values/merging_values_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
 
+test-docker-reconcile-upgrade: build
+	go test -v -timeout=80m ./tests/docker/reconcile_upgrade/reconcile_upgrade_test.go -ginkgo.v -rke2Version v1.35.3+rke2r3 -patcherBin ./$(BINARY)
+
 VERSION ?= $(shell grep '^const version' internal/cmd/app.go | cut -d '"' -f2)
 
 docker-build:

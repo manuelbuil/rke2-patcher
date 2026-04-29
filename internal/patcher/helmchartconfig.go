@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"dario.cat/mergo"
@@ -18,29 +17,9 @@ const (
 	dataDirEnv  = "RKE2_PATCHER_DATA_DIR"
 	registryEnv = "RKE2_PATCHER_REGISTRY"
 
-	defaultDataDir      = "/var/lib/rancher/rke2"
 	defaultNamespace    = "kube-system"
 	defaultRegistryHost = "registry.rancher.com"
 )
-
-// WriteHelmChartConfig generates a HelmChartConfig manifest and writes it to the appropriate file path
-func WriteHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, error) {
-	filePath, content, _ := BuildHelmChartConfig(componentName, defaultChartConfigName, imageName, imageTag)
-
-	if err := WriteHelmChartConfigContent(filePath, content); err != nil {
-		return filePath, err
-	}
-
-	return filePath, nil
-}
-
-func WriteHelmChartConfigContent(filePath string, content string) error {
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return err
-	}
-
-	return nil
-}
 
 // BuildHelmChartConfig generates the file path and content for a HelmChartConfig manifest.
 //
@@ -48,27 +27,13 @@ func WriteHelmChartConfigContent(filePath string, content string) error {
 // component name so multiple components that patch the same chart (for example
 // `rke2-canal-flannel` and `rke2-canal-calico`) converge on the same manifest file and
 // can be merged on subsequent patch runs.
-func BuildHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, string, string) {
-	manifestsDir := resolveManifestsDir()
+func BuildHelmChartConfig(componentName string, defaultChartConfigName string, imageName string, imageTag string) (string, string) {
 
-	helmChartConfigFile := defaultChartConfigName + "-config-rke2-patcher.yaml"
-
-	filePath := filepath.Join(manifestsDir, helmChartConfigFile)
-	// Always strip registry prefix from imageName to avoid double registry when system-default-registry is set
 	repo := imageRepositoryWithoutRegistry(imageName)
 	valuesContent := renderValuesContent(componentName, defaultChartConfigName, repo, imageTag)
 	content := renderHelmChartConfig(defaultChartConfigName, defaultNamespace, valuesContent)
 
-	return filePath, content, valuesContent
-}
-
-// resolveManifestsDir determines the directory where HelmChartConfig manifests should be written
-func resolveManifestsDir() string {
-	envVar := strings.TrimSpace(os.Getenv(dataDirEnv))
-	if envVar == "" {
-		return filepath.Join(defaultDataDir, "server", "manifests")
-	}
-	return filepath.Join(envVar, "server", "manifests")
+	return content, valuesContent
 }
 
 func MergeHelmChartConfigWithContents(generatedContent string, existingContents []string) (string, error) {
@@ -139,16 +104,12 @@ func MergeHelmChartConfigWithContents(generatedContent string, existingContents 
 		mergedDoc.SetKind("HelmChartConfig")
 	}
 
-	b, err := yaml.Marshal(mergedDoc.Object)
-	if err != nil {
-		return "", err
-	}
-
-	if len(b) == 0 || b[len(b)-1] != '\n' {
-		b = append(b, '\n')
-	}
-
-	return string(b), nil
+	// Instead of marshaling the unstructured object (which can cause apiversion duplication),
+	// extract the merged spec and use the string template for output.
+	name := strings.TrimSpace(mergedDoc.GetName())
+	namespace := strings.TrimSpace(mergedDoc.GetNamespace())
+	valuesContent, _, _ := unstructured.NestedString(mergedSpec, "valuesContent")
+	return renderHelmChartConfig(name, namespace, valuesContent), nil
 }
 
 func HelmChartConfigIdentityFromContent(content string) (string, string, error) {
@@ -281,7 +242,12 @@ func mergeValuesContent(existing string, incoming string) (string, error) {
 		return "", err
 	}
 
-	return strings.TrimRight(string(b), "\n"), nil
+	// Indent each line by 4 spaces to match the original style
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = "    " + line
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func SubtractPatcherValuesContent(existingFileContent, generatedValuesContent string) (string, error) {
@@ -333,28 +299,20 @@ func SubtractPatcherValuesContent(existingFileContent, generatedValuesContent st
 		if err != nil {
 			return "", fmt.Errorf("failed to serialize updated valuesContent: %w", err)
 		}
-		updatedSpec["valuesContent"] = strings.TrimRight(string(b), "\n")
+		// Indent each line by 4 spaces to match the original style
+		lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+		for i, line := range lines {
+			lines[i] = "    " + line
+		}
+		updatedSpec["valuesContent"] = strings.Join(lines, "\n")
 	}
 
-	updatedDoc := existingDoc.DeepCopy()
-	if err := unstructured.SetNestedMap(updatedDoc.Object, updatedSpec, "spec"); err != nil {
-		return "", fmt.Errorf("failed setting updated HelmChartConfig spec: %w", err)
-	}
-
-	// Ensure correct casing for apiVersion and kind
-	updatedDoc.SetAPIVersion("helm.cattle.io/v1")
-	updatedDoc.SetKind("HelmChartConfig")
-
-	result, err := yaml.Marshal(updatedDoc.Object)
-	if err != nil {
-		return "", fmt.Errorf("failed to serialize updated HelmChartConfig: %w", err)
-	}
-
-	if len(result) == 0 || result[len(result)-1] != '\n' {
-		result = append(result, '\n')
-	}
-
-	return string(result), nil
+	// Instead of marshaling the unstructured object (which can cause apiversion duplication),
+	// extract the updated spec and use the string template for output.
+	name := strings.TrimSpace(existingDoc.GetName())
+	namespace := strings.TrimSpace(existingDoc.GetNamespace())
+	valuesContent, _, _ := unstructured.NestedString(updatedSpec, "valuesContent")
+	return renderHelmChartConfig(name, namespace, valuesContent), nil
 }
 
 func deepSubtractMap(base, toRemove map[string]any) map[string]any {

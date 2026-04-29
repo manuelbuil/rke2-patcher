@@ -3,53 +3,33 @@ package kube
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
-
 // ClusterVersion retrieves the Kubernetes cluster version by querying the kube API server
 func ClusterVersion() (string, error) {
-	api, err := kubeAPIClient()
+	// Try in-cluster config
+	config, err := rest.InClusterConfig()
 	if err != nil {
-		return "", err
-	}
-
-	return clusterVersion(api)
-}
-
-func clusterVersion(api kubeAPI) (string, error) {
-	restConfig := &rest.Config{Host: api.BaseURL}
-
-	httpClient := api.Client
-	if httpClient == nil {
-		httpClient = &http.Client{}
-	}
-
-	authHeader := strings.TrimSpace(api.AuthHeader)
-	if authHeader != "" {
-		wrapped := *httpClient
-		baseTransport := wrapped.Transport
-		if baseTransport == nil {
-			baseTransport = http.DefaultTransport
+		// Fallback to kubeconfig
+		kubeconfigPath := os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			kubeconfigPath = "/etc/rancher/rke2/rke2.yaml"
 		}
-		wrapped.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-			cloned := request.Clone(request.Context())
-			cloned.Header = request.Header.Clone()
-			cloned.Header.Set("Authorization", authHeader)
-			return baseTransport.RoundTrip(cloned)
-		})
-		httpClient = &wrapped
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to build kubeconfig: %w", err)
+		}
 	}
 
-	discoveryClient, err := discovery.NewDiscoveryClientForConfigAndClient(restConfig, httpClient)
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize discovery client: %w", err)
 	}

@@ -12,7 +12,7 @@ func TestRenderValuesContent_AddsPatcherCommentToImageAndRepositoryLines(t *test
 	if !strings.Contains(valuesForIngress, "repository: rancher/hardened-ingress-nginx # change made by rke2-patcher") {
 		t.Fatalf("expected ingress repository line to include patcher comment, got:\n%s", valuesForIngress)
 	}
-	if !strings.Contains(valuesForIngress, "tag: v1.0.0 # change made by rke2-patcher") {
+	if !strings.Contains(valuesForIngress, "primeTag: v1.0.0 # change made by rke2-patcher") {
 		t.Fatalf("expected ingress tag line to include patcher comment, got:\n%s", valuesForIngress)
 	}
 }
@@ -65,7 +65,7 @@ func TestBuildHelmChartConfigWithDataDir_GeneratedContentParsesForPatchedCompone
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, valuesContent := BuildHelmChartConfig(tt.componentName, tt.chartName, tt.imageName, tt.imageTag)
+			_, valuesContent := BuildHelmChartConfig(tt.componentName, tt.chartName, tt.imageName, tt.imageTag)
 
 			if strings.TrimSpace(valuesContent) == "" {
 				t.Fatal("expected non-empty valuesContent, got empty content")
