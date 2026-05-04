@@ -22,12 +22,14 @@ const nodePatcherImageTarballPath = "/var/lib/rancher/rke2/agent/images/rke2-pat
 const execModeEnvName = "EXEC_MODE"
 const execModeBinary = "binary"
 const execModePod = "pod"
+const projectRootRelativeFromSuite = "../../.."
 
 type TestConfig struct {
 	TestDir        string
 	KubeconfigFile string
 	PatcherBinary  string
 	ExecMode       string
+	ProjectRoot    string
 	PatcherImage   string
 	RKE2Version    string
 	ServerConfig   string
@@ -52,14 +54,19 @@ func NewTestConfig(version string, patcherBinary string) (*TestConfig, error) {
 		return nil, fmt.Errorf("invalid %s value %q: expected %s or %s", execModeEnvName, execMode, execModeBinary, execModePod)
 	}
 
+	projectRoot, err := resolveProjectRoot()
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("[docker-tests] resolved project root=%s exec_mode=%s\n", projectRoot, execMode)
+
 	resolvedBinary := ""
 	if execMode == execModeBinary {
 		if strings.TrimSpace(patcherBinary) == "" {
 			return nil, fmt.Errorf("patcher binary path cannot be empty")
 		}
 
-		var err error
-		resolvedBinary, err = resolvePatcherBinaryPath(patcherBinary)
+		resolvedBinary, err = resolvePatcherBinaryPath(patcherBinary, projectRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -74,11 +81,35 @@ func NewTestConfig(version string, patcherBinary string) (*TestConfig, error) {
 		TestDir:       tempDir,
 		PatcherBinary: resolvedBinary,
 		ExecMode:      execMode,
+		ProjectRoot:   projectRoot,
 		RKE2Version:   version,
 	}, nil
 }
 
-func resolvePatcherBinaryPath(patcherBinary string) (string, error) {
+func resolveProjectRoot() (string, error) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get working directory while resolving project root: %w", err)
+	}
+
+	projectRoot, err := filepath.Abs(filepath.Join(workingDir, projectRootRelativeFromSuite))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve project root from %q: %w", workingDir, err)
+	}
+
+	goModPath := filepath.Join(projectRoot, "go.mod")
+	chartPath := filepath.Join(projectRoot, "charts", "rke2-patcher", "Chart.yaml")
+	if _, err := os.Stat(goModPath); err != nil {
+		return "", fmt.Errorf("resolved project root %q is invalid: missing go.mod", projectRoot)
+	}
+	if _, err := os.Stat(chartPath); err != nil {
+		return "", fmt.Errorf("resolved project root %q is invalid: missing charts/rke2-patcher/Chart.yaml", projectRoot)
+	}
+
+	return projectRoot, nil
+}
+
+func resolvePatcherBinaryPath(patcherBinary string, projectRoot string) (string, error) {
 	trimmed := strings.TrimSpace(patcherBinary)
 	if trimmed == "" {
 		return "", fmt.Errorf("patcher binary path cannot be empty")
@@ -91,11 +122,7 @@ func resolvePatcherBinaryPath(patcherBinary string) (string, error) {
 		return trimmed, nil
 	}
 
-	// Assume tests are run from the project root; resolve relative to cwd.
-	abs, err := filepath.Abs(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve patcher binary path: %w", err)
-	}
+	abs := filepath.Join(projectRoot, trimmed)
 	if _, err := os.Stat(abs); err != nil {
 		return "", fmt.Errorf("patcher binary %q not found: %w", abs, err)
 	}
@@ -220,7 +247,8 @@ func (config *TestConfig) PreparePatcherPodExecution() error {
 
 func (config *TestConfig) BuildPatcherImage() (string, error) {
 	imageRef := patcherImageRepository + ":test"
-	if out, err := RunCommand("make build-image VERSION=test"); err != nil {
+	buildCmd := fmt.Sprintf("cd %q && make build-image VERSION=test", config.ProjectRoot)
+	if out, err := RunCommand(buildCmd); err != nil {
 		return "", fmt.Errorf("failed to build patcher image %s: %s: %w", imageRef, out, err)
 	}
 
@@ -253,9 +281,11 @@ func (config *TestConfig) InstallPatcherChart(imageRef string) error {
 		return err
 	}
 
+	chartPath := filepath.Join(config.ProjectRoot, "charts", "rke2-patcher")
 	helmCmd := fmt.Sprintf(
-		"helm upgrade --install %s charts/rke2-patcher --kubeconfig %q --namespace %s --create-namespace --set image.repository=%q --set image.tag=%q --set image.pullPolicy=IfNotPresent --wait --timeout 180s",
+		"helm upgrade --install %s %q --kubeconfig %q --namespace %s --create-namespace --set image.repository=%q --set image.tag=%q --set image.pullPolicy=IfNotPresent --wait --timeout 180s",
 		patcherReleaseName,
+		chartPath,
 		config.KubeconfigFile,
 		patcherNamespace,
 		repository,
